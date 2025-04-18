@@ -1,0 +1,436 @@
+{% extends "layouts/module_admin.html" %}
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="Todo">Todo</a></li>
+{% endblock %}
+{% block module %}
+<script src="{{ config.ASSETS_ROOT }}/plugins/vue/vue@2.js"></script>
+<script src="{{ config.ASSETS_ROOT }}/plugins/vue/axios.min.js"></script>
+<div id="list_tasks">
+    <!-- Навигация по вкладкам -->
+    <ul class="nav nav-tabs">
+      <li class="nav-item">
+        <button class="btn btn-outline-success me-1" @click="addList"><i class="fas fa-plus"></i></button>
+      </li>
+      <li v-for="(list, index) in lists" :key="index" class="nav-item d-flex align-items-center">
+        <a 
+          class="nav-link"
+          :class="['nav-link', { active: currentTab === index }]" 
+          href="#" 
+          @click.prevent="currentTab = index"
+        >
+          [[ list.title ]]
+          <button 
+            class="btn btn-sm btn-outline-success ms-2 py-0 px-1" 
+            @click.stop="openEditModal(index)"
+          >
+            <i class="fas fa-pencil"></i> <!-- Иконка редактирования -->
+          </button>
+          <button 
+            class="btn btn-sm btn-outline-danger ms-0 py-0 px-1" 
+            @click.stop="removeList(index)"
+          >
+            <i class="fas fa-trash"></i> <!-- Иконка удаления -->
+          </button>
+        </a>
+      </li>
+    </ul>
+
+  <!-- Содержимое текущей вкладки -->
+  <div class="mt-3" v-if="lists.length > 0">
+    <!-- Список задач -->
+    <div v-for="(task, taskIndex) in filteredTasks" :key="task.id" class="accordion">
+      <div class="accordion-item">
+        <h2 class="d-flex justify-content-between align-items-center accordion-header" :id="'heading' + task.id">
+          <!-- Заголовок задачи -->
+          <div 
+            class="accordion-button p-2" 
+            :class="{ collapsed: expandedTaskId !== task.id }" 
+            type="button" 
+            @click.stop="toggleTask(task.id)"
+          >
+            <!-- Чекбокс для завершения задачи -->
+            <input 
+              type="checkbox" 
+              class="form-check-input me-2" 
+              :checked="task.completed" 
+              @click.stop="complete(task.id)"
+            />
+            <!-- Название задачи -->
+            <span :class="{ 'task-completed': task.completed }">[[ task.title ]]</span>
+          </div>
+
+          <!-- Кнопки редактирования и удаления -->
+          <div class="d-flex">
+            <button 
+              class="btn btn-sm btn-outline-secondary" 
+              @click.stop="startEditingTask(task.id)"
+            >
+              <i class="fas fa-pencil"></i>
+            </button>
+            <button 
+              class="btn btn-sm btn-outline-danger" 
+              @click.stop="removeTask(task.id)"
+            >
+              <i class="fas fa-trash"></i>
+            </button>
+          </div>
+        </h2>
+
+        <!-- Детали задачи (разворачиваемый блок) -->
+        <div 
+          :id="'collapse' + task.id" 
+          class="accordion-collapse collapse" 
+          :class="{ show: expandedTaskId === task.id }"
+          :aria-labelledby="'heading' + task.id"
+        >
+          <div class="accordion-body">
+            <!-- Режим редактирования -->
+            <div v-if="editingTaskId === task.id">
+              <input 
+                type="text" 
+                class="form-control mb-2" 
+                v-model="task.title" 
+                placeholder="Название задачи"
+              />
+              <textarea 
+                class="form-control mb-2" 
+                v-model="task.notes" 
+                placeholder="Описание задачи"
+              ></textarea>
+              <button class="btn btn-primary me-2" @click="saveTask(task.id)">Save</button>
+              <button class="btn btn-secondary" @click="cancelEditTask(task.id)">Cancel</button>
+            </div>
+            <!-- Режим просмотра -->
+            <div v-else>
+              <p class="notes" v-if="task.notes">[[ task.notes ]]</p>
+              <p class="notes text-muted" v-else>No notes available</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Кнопка добавления задачи -->
+    <button class="btn btn-outline-success mt-3" @click="addTask(currentTab)"><i class="fas fa-plus me-2"></i>Task</button>
+  </div>
+
+  <!-- Модальное окно для редактирования названия списка -->
+  <div class="modal fade" id="editModal" tabindex="-1" aria-labelledby="editModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="editModalLabel">Edit name list</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <input 
+            type="text" 
+            class="form-control" 
+            v-model="editingName" 
+            placeholder="New name"
+          />
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" @click="cancelEdit">Cancel</button>
+          <button type="button" class="btn btn-primary" @click="saveEdit">OK</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+<script>
+  new Vue({
+    el: '#list_tasks',
+    delimiters: ['[[', ']]'], // Измененные разделители
+    data: {
+      search: '',
+      sortKey: 'runtime',
+      sortAsc: true,
+      tasks: [],
+      lists: [],
+      selectedList: null,
+      currentTab:0,
+      loading: false,
+      error: null,
+      editingIndex:0,
+      editingName:"",
+      expandedTaskId: null, // ID раскрытой задачи
+      editingTaskId: null, // ID задачи в режиме редактирования
+      taskBackup: {} // Резервная копия задачи для отмены изменений
+    },
+    async created() {
+      await this.fetchLists()
+      await this.fetchTasks()
+    },
+    mounted() {
+      if (localStorage.scheduler_search) {
+        this.search = localStorage.scheduler_search;
+      }
+      if (localStorage.scheduler_sortKey) {
+        this.sortKey = localStorage.scheduler_sortKey;
+      }
+      if (localStorage.scheduler_sortAsc) {
+        this.sortAsc = localStorage.scheduler_sortAsc;
+      }
+    },
+    watch: {
+      search(value) {
+        localStorage.scheduler_search = value;
+      },
+      sortKey(value) {
+        localStorage.scheduler_sortKey = value;
+      },
+      sortAsc(value) {
+        localStorage.scheduler_sortAsc = value;
+      },
+    },
+    computed: {
+        // Фильтруем задачи для текущего списка
+        filteredTasks() {
+          const currentListId = this.lists[this.currentTab]?.id;
+          return this.tasks.filter(task => task.list_id === currentListId);
+        },
+      filteredData() {
+        let data = this.tasks;
+
+        if (this.search) {
+          data = data.filter(row =>
+            Object.values(row).some(val =>
+              String(val).toLowerCase().includes(this.search.toLowerCase())
+            )
+          );
+        }
+
+        if (this.sortKey) {
+          data = data.slice().sort((a, b) => {
+            let aVal = a[this.sortKey];
+            let bVal = b[this.sortKey];
+
+            if (aVal < bVal) return this.sortAsc ? -1 : 1;
+            if (aVal > bVal) return this.sortAsc ? 1 : -1;
+            return 0;
+          });
+        }
+
+        return data;
+      },
+    },
+    methods: {
+      fetchLists() {
+        this.loading = true
+        axios.get(`/api/Todo/lists`)
+          .then(response => {
+            this.lists = response.data.result
+            this.loading = false
+          })
+          .catch(error => {
+            console.log(error)
+            this.error = error
+            this.loading = false
+          })
+          ;
+      },
+      fetchTasks() {
+        this.loading = true
+        axios.get(`/api/Todo/tasks`)
+          .then(response => {
+            this.tasks = response.data.result
+            this.loading = false
+          })
+          .catch(error => {
+            console.log(error)
+            this.error = error
+            this.loading = false
+          })
+          ;
+      },
+      sortBy(key) {
+        if (this.sortKey === key) {
+          this.sortAsc = !this.sortAsc;
+        } else {
+          this.sortKey = key;
+          this.sortAsc = true;
+        }
+      },
+      getSortClass(key) {
+        if (this.sortKey === key) {
+          return this.sortAsc ? 'sortable asc' : 'sortable desc';
+        } else {
+          return '';
+        }
+      },
+      // Добавление нового списка
+      async addList() {
+          const list = {
+            title: 'Новый список',
+          }
+          // API add list (return id)
+          const res = await axios.post(`/api/Todo/list/0`, list)
+          if (res.data.success)
+          {
+            this.lists.push(res.data.result);
+            this.currentTab = this.lists.length - 1;
+          }
+        },
+        // Добавление новой задачи в текущий список
+        async addTask(listIndex) {
+          var newTask = {
+            list_id: this.lists[listIndex].id,
+            title: 'Новая задача',
+          };
+          // API add task (return id)
+          const res = await axios.post(`/api/Todo/task/0`, newTask)
+          if (res.data.success)
+          {
+            this.tasks.push(res.data.result);
+          }
+        },
+        // Удаление задачи из списка
+        async removeTask(taskId) {
+          // API remove task
+          const res = await axios.delete(`/api/Todo/task/`+taskId)
+          if (!res.data.success)
+            return
+          this.tasks = this.tasks.filter(task => task.id !== taskId);
+          if (this.editingTaskId === taskId) {
+            this.cancelEditTask(taskId); // Отменяем редактирование
+          }
+        },
+        async complete(taskId){
+          const res = await axios.get(`/api/Todo/task/`+taskId+`/complete`)
+          if (!res.data.success)
+            return
+          const taskIndex = this.tasks.findIndex(task => task.id === taskId);
+          // Создаём копию массива tasks
+          const updatedTasks = [...this.tasks];
+          // Заменяем задачу по индексу
+          updatedTasks[taskIndex] = res.data.result;
+          // Обновляем массив tasks
+          this.tasks = updatedTasks;
+        },
+        // Начало редактирования задачи
+        startEditingTask(taskId) {
+          const task = this.tasks.find(task => task.id === taskId);
+          if (task) {
+            this.taskBackup = { ...task }; // Создаем резервную копию
+            this.editingTaskId = taskId;
+            this.expandedTaskId = taskId
+          }
+        },
+        // Сохранение изменений задачи
+        async saveTask(taskId) {
+          const task = this.tasks.find(task => task.id === taskId);
+          const res = await axios.post(`/api/Todo/task/`+taskId, task)
+          if (!res.data.success)
+            return
+          this.editingTaskId = null; // Выходим из режима редактирования
+          this.taskBackup = {}; // Очищаем резервную копию
+        },
+        // Отмена редактирования задачи
+        cancelEditTask(taskId) {
+          const taskIndex = this.tasks.findIndex(task => task.id === taskId);
+          if (taskIndex !== -1 && this.taskBackup.id) {
+            this.$set(this.tasks, taskIndex, { ...this.taskBackup });// Восстанавливаем из резервной копии
+            this.editingTaskId = null; // Выходим из режима редактирования
+            this.taskBackup = {}; // Очищаем резервную копию
+          }
+        },
+        // Управление разворачиванием задачи
+        toggleTaskDetails(task) {
+          if (!task.notes) {
+            // Если заметок нет, предотвращаем разворачивание
+            event.stopPropagation();
+            return;
+          }
+
+          // Разрешаем стандартное поведение (разворачивание)
+        },
+        // Открытие модального окна для редактирования названия списка
+        openEditModal(index) {
+          this.editingIndex = index;
+          this.editingName = this.lists[index].title; // Сохраняем текущее название
+          var modal = new bootstrap.Modal(document.getElementById('editModal'));
+          modal.show();
+        },
+        // Сохранение изменений названия списка
+        async saveEdit() {
+          if (this.editingIndex !== null) {
+            this.lists[this.editingIndex].title = this.editingName; // Обновляем название
+            // TODO API save list
+            const res = await axios.post(`/api/Todo/list/`+ this.lists[this.editingIndex].id, this.lists[this.editingIndex])
+          }
+          this.closeModal();
+        },
+        // Отмена редактирования
+        cancelEdit() {
+          this.editingIndex = null; // Сбрасываем индекс
+          this.editingName = ''; // Очищаем временное значение
+        },
+        // Закрытие модального окна
+        closeModal() {
+          var modal = bootstrap.Modal.getInstance(document.getElementById('editModal'));
+          modal.hide();
+          this.cancelEdit();
+        },
+        // Удаление списка
+        async removeList(index) {
+          const id = this.lists[index].id
+          const res = await axios.delete(`/api/Todo/list/`+id)
+          if (!res.data.success)
+            return
+          
+          this.lists.splice(index, 1); // Удаляем список
+          // TODO API delete list
+
+          // Если удалили текущий список, переходим к первому
+          if (this.currentTab === index) {
+            this.currentTab = 0;
+          } else if (this.currentTab > index) {
+            this.currentTab--; // Корректируем индекс текущей вкладки
+          }
+
+        },
+        // Переключение раскрытия задачи
+        toggleTask(taskId) {
+          if (this.expandedTaskId === taskId) {
+            this.expandedTaskId = null; // Свернуть задачу
+          } else {
+            this.expandedTaskId = taskId; // Раскрыть задачу
+          }
+        },
+    }
+  });
+</script>
+<style>
+  .sortable {
+      cursor: pointer;
+  }
+  .sortable:after {
+      content: '';
+      float: right;
+      margin-left: 5px;
+      border-width: 0 10px 10px;
+      border-style: solid;
+      border-color: transparent transparent #000 transparent;
+  }
+  .sortable.asc:after {
+      border-width: 10px 10px 0;
+      border-color: #000 transparent transparent transparent;
+  }
+  .sortable.desc:after {
+      border-width: 0 10px 10px;
+      border-color: transparent transparent #000 transparent;
+  }
+  .notes {
+      white-space: pre-wrap; /* Разрешаем перенос текста */
+      word-break: break-word; /* Разрешаем разрыв длинных слов */
+    }
+/* Стиль для завершённой задачи */
+.task-completed {
+  text-decoration: line-through; /* Перечёркивание текста */
+  color: #888; /* Затенение текста */
+  font-style: italic; /* Опционально: курсив */
+}
+</style>
+{% endblock %}
