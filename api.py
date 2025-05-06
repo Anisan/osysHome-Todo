@@ -7,7 +7,7 @@ from app.authentication.handlers import handle_user_required
 from app.api.models import model_404, model_result
 from plugins.Todo.models.Task import TodoTask
 from plugins.Todo.models.List import TodoList
-from app.database import row2dict, session_scope
+from app.database import row2dict, session_scope, get_now_to_utc
 
 _api_ns = Namespace(name="Todo", description="Todo namespace", validate=True)
 
@@ -55,7 +55,7 @@ class EndpointList(Resource):
                 list_rec = session.query(TodoList).filter(TodoList.id == list_id).one()
             else:
                 list_rec = TodoList()
-                list_rec.created = datetime.datetime.now()
+                list_rec.created = get_now_to_utc()
                 session.add(list_rec)
             list_rec.title = data.get('title')
             list_rec.updated = data.get('updated')
@@ -110,10 +110,10 @@ class EndpointTask(Resource):
             data = request.get_json()
             if data.get("id"):
                 task = session.query(TodoTask).filter(TodoTask.id == task_id).one()
-                task.updated = datetime.datetime.now()
+                task.updated = get_now_to_utc()
             else:
                 task = TodoTask()
-                task.created = datetime.datetime.now()
+                task.created = get_now_to_utc()
                 session.add(task)
             task.list_id = data.get('list_id')
             task.title = data.get('title')
@@ -145,7 +145,7 @@ class EndpointTaskComplete(Resource):
                 if task.completed:
                     task.completed = None
                 else:
-                    task.completed = datetime.datetime.now()
+                    task.completed = get_now_to_utc()
                 session.commit()
                 result = row2dict(task)
                 return {"success": True, "result": result}, 200
