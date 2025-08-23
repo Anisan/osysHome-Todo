@@ -21,7 +21,7 @@ class Todo(BasePlugin):
         self.title = "Todo"
         self.description = """Managment tasks"""
         self.system = True
-        self.actions = ['search','widget']
+        self.actions = ['search','widget','page']
         self.category = "App"
         self.version = "0.1"
         
@@ -34,6 +34,9 @@ class Todo(BasePlugin):
 
     def admin(self, request):
         return render_template("todo_tasks.html")
+    
+    def page(self, request):
+        return render_template("todo_tasks_page.html")
 
     def search(self, query: str) -> list:
         res = []
