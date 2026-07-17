@@ -1,430 +1,1257 @@
+<link rel="stylesheet" href="{{ url_for('Todo.static', filename='choices/choices.min.css') }}">
+<link rel="stylesheet" href="{{ url_for('Todo.static', filename='choices/users-multiselect.css') }}">
 <script src="{{ config.ASSETS_ROOT }}/plugins/vue/vue@2.js"></script>
 <script src="{{ config.ASSETS_ROOT }}/plugins/vue/axios.min.js"></script>
-<div id="list_tasks">
+<script src="{{ url_for('Todo.static', filename='choices/choices.min.js') }}"></script>
+<script src="{{ url_for('Todo.static', filename='choices/users-multiselect.js') }}"></script>
+{% set todo_i18n = {
+  'list': _('List'),
+  'refresh': _('Refresh'),
+  'drag_reorder': _('Drag to reorder'),
+  'task': _('Task'),
+  'sort': _('Sort'),
+  'sort_by_name': _('By name'),
+  'sort_by_finish': _('By finish'),
+  'sort_by_priority': _('By priority'),
+  'sort_asc': _('Ascending'),
+  'sort_desc': _('Descending'),
+  'completed_bottom': _('Completed to bottom'),
+  'hide_completed': _('Hide completed'),
+  'reminder_enabled': _('Reminder enabled'),
+  'notification_confirmed': _('Notification confirmed'),
+  'mark_notification': _('Mark notification'),
+  'no_description': _('No description'),
+  'start': _('Start'),
+  'finish': _('Finish'),
+  'no_tasks': _('No tasks'),
+  'main': _('Main'),
+  'settings': _('Settings'),
+  'title': _('Title'),
+  'task_title_placeholder': _('Task title'),
+  'description': _('Description'),
+  'task_description_placeholder': _('Task description'),
+  'use_start_date': _('Set start date (otherwise just a note)'),
+  'all_day': _('All day'),
+  'planned_finish': _('Finish (plan)'),
+  'priority': _('Priority'),
+  'priority_low': _('Low'),
+  'priority_normal': _('Normal'),
+  'priority_high': _('High'),
+  'priority_urgent': _('Urgent'),
+  'enable_reminder': _('Enable reminder (via Scheduler)'),
+  'reminder_offset': _('Minutes before start'),
+  'reminder_code': _('Reminder code'),
+  'empty_use_default': _('Empty - use default code from plugin settings'),
+  'available_vars': _("Available: task, task['title'], task_id, event, params, logger"),
+  'start_code': _('Task start code'),
+  'start_code_help': _('Runs at "Start" date via Scheduler'),
+  'finish_code': _('Task finish code'),
+  'finish_code_help': _('Runs at "Finish" date via Scheduler'),
+  'notification_delivered': _('Notification marked as delivered'),
+  'cancel': _('Cancel'),
+  'save': _('Save'),
+  'list_name_placeholder': _('List title'),
+  'delete': _('Delete'),
+  'new_task': _('New task'),
+  'edit_task': _('Edit task'),
+  'new_list': _('New list'),
+  'edit_list': _('Edit list'),
+  'days_short': _('d.'),
+  'hours_short': _('h'),
+  'minutes_short': _('min'),
+  'duration': _('Duration'),
+  'in_progress': _('In progress'),
+  'delete_task_title': _('Delete task?'),
+  'delete_task_confirm': _('Are you sure you want to delete "{title}"?'),
+  'task_fallback': _('task'),
+  'delete_list_title': _('Delete list?'),
+  'delete_list_confirm': _('Delete list "{title}" and all its tasks?'),
+  'list_fallback': _('list'),
+  'creator': _('Creator'),
+  'assignee': _('Assignee'),
+  'viewers': _('Viewers'),
+  'no_assignee': _('No assignee'),
+  'read_only_viewers': _('Read-only viewers'),
+  'select_all_users': _('Select all users'),
+  'clear_selected_users': _('Clear selected users'),
+  'access_denied': _('Access denied')
+} %}
+<div id="list_tasks" v-cloak>
     <!-- Навигация по вкладкам -->
     <ul class="nav nav-tabs">
-      <li class="nav-item">
-        <button class="btn btn-outline-success me-1" @click="addList"><i class="fas fa-plus"></i></button>
+      <li class="nav-item d-flex align-items-center gap-1">
+        <button class="btn btn-outline-success" @click="openListModalCreate"><i class="fas fa-plus me-1"></i>{{ _('List') }}</button>
+        <button
+          class="btn btn-outline-secondary"
+          title="{{ _('Refresh') }}"
+          :disabled="loading"
+          @click="refresh"
+        >
+          <i class="fas fa-sync-alt" :class="{ 'fa-spin': loading }"></i>
+        </button>
       </li>
-      <li v-for="(list, index) in lists" :key="index" class="nav-item d-flex align-items-center">
-        <a 
-          class="nav-link"
-          :class="['nav-link', { active: currentTab === index }]" 
-          href="#" 
+      <li
+        v-for="(list, index) in lists"
+        :key="list.id"
+        class="nav-item d-flex align-items-center todo-list-tab"
+        :class="{
+          'todo-list-drag-over': dragOverIndex === index,
+          'todo-list-dragging': dragListIndex === index
+        }"
+        @dragover.prevent="onListDragOver(index)"
+        @drop.prevent="onListDrop(index)"
+      >
+        <a
+          class="nav-link d-flex align-items-center"
+          :class="{ active: currentTab === index }"
+          href="#"
           @click.prevent="currentTab = index"
         >
+          <span
+            v-if="listCanReorder(list)"
+            class="todo-list-drag-handle me-1"
+            draggable="true"
+            title="{{ _('Drag to reorder') }}"
+            @dragstart.stop="onListDragStart(index, $event)"
+            @dragend="onListDragEnd"
+          >
+            <i class="fas fa-grip-vertical text-muted"></i>
+          </span>
           [[ list.title ]]
-          <button 
-            class="btn btn-sm btn-outline-success ms-2 py-0 px-1" 
+          <button
+            v-if="listCanEdit(list)"
+            class="btn btn-sm btn-outline-success ms-2 py-0 px-1"
             @click.stop="openEditModal(index)"
-          >
-            <i class="fas fa-pencil"></i> <!-- Иконка редактирования -->
-          </button>
-          <button 
-            class="btn btn-sm btn-outline-danger ms-0 py-0 px-1" 
-            @click.stop="removeList(index)"
-          >
-            <i class="fas fa-trash"></i> <!-- Иконка удаления -->
-          </button>
+          ><i class="fas fa-pencil"></i></button>
+          <button
+            v-if="listCanDelete(list)"
+            class="btn btn-sm btn-outline-danger ms-0 py-0 px-1"
+            @click.stop="askRemoveList(index)"
+          ><i class="fas fa-trash"></i></button>
         </a>
       </li>
     </ul>
 
   <!-- Содержимое текущей вкладки -->
   <div class="mt-3" v-if="lists.length > 0">
+    <!-- Панель действий, сортировки и фильтров -->
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-3 todo-toolbar">
+      <button
+        v-if="currentListCanCreateTask"
+        class="btn btn-outline-success btn-sm"
+        @click="openTaskModalCreate(currentTab)"
+      >
+        <i class="fas fa-plus me-1"></i>{{ _('Task') }}
+      </button>
+      <label class="mb-0 text-muted small ms-1">{{ _('Sort') }}:</label>
+      <select class="form-select form-select-sm todo-sort-select" v-model="sortKey">
+        <option value="title">{{ _('By name') }}</option>
+        <option value="finished">{{ _('By finish') }}</option>
+        <option value="priority">{{ _('By priority') }}</option>
+      </select>
+      <button
+        class="btn btn-sm btn-outline-secondary"
+        :title="sortAsc ? i18n.sort_asc : i18n.sort_desc"
+        @click="sortAsc = !sortAsc"
+      >
+        <i :class="sortAsc ? 'fas fa-sort-amount-up' : 'fas fa-sort-amount-down'"></i>
+      </button>
+      <div class="form-check form-check-inline mb-0 ms-2">
+        <input class="form-check-input" type="checkbox" id="completedBottom" v-model="completedBottom">
+        <label class="form-check-label small" for="completedBottom">{{ _('Completed to bottom') }}</label>
+      </div>
+      <div class="form-check form-check-inline mb-0">
+        <input class="form-check-input" type="checkbox" id="hideCompleted" v-model="hideCompleted">
+        <label class="form-check-label small" for="hideCompleted">{{ _('Hide completed') }}</label>
+      </div>
+    </div>
+
     <!-- Список задач -->
-    <div v-for="(task, taskIndex) in filteredTasks" :key="task.id" class="accordion">
-      <div class="accordion-item">
+    <div v-for="task in filteredTasks" :key="task.id" class="accordion">
+      <div class="accordion-item" :class="{ 'task-item-completed': task.completed }">
         <h2 class="d-flex justify-content-between align-items-center accordion-header" :id="'heading' + task.id">
-          <!-- Заголовок задачи -->
-          <div 
-            class="accordion-button p-2" 
-            :class="{ collapsed: expandedTaskId !== task.id }" 
-            type="button" 
+          <div
+            class="accordion-button p-2 flex-grow-1"
+            :class="{ collapsed: expandedTaskId !== task.id }"
+            type="button"
             @click.stop="toggleTask(task.id)"
           >
-            <!-- Чекбокс для завершения задачи -->
-            <input 
-              type="checkbox" 
-              class="form-check-input me-2" 
-              :checked="task.completed" 
+            <input
+              type="checkbox"
+              class="form-check-input me-2"
+              :checked="!!task.completed"
+              :disabled="!taskCanComplete(task)"
               @click.stop="complete(task.id)"
             />
-            <!-- Название задачи -->
             <span :class="{ 'task-completed': task.completed }">[[ task.title ]]</span>
+            <span
+              v-if="task.priority != null && task.priority !== 1"
+              class="badge ms-2"
+              :class="priorityClass(task.priority)"
+            >[[ priorityLabel(task.priority) ]]</span>
+            <span
+              v-if="task.started && task.settings && task.settings.reminder_enabled"
+              class="badge bg-secondary ms-1"
+              :title="i18n.reminder_enabled"
+            ><i class="fas fa-bell"></i></span>
+            <span
+              v-if="task.started && task.settings && task.settings.notified"
+              class="badge bg-info ms-1"
+              :title="i18n.notification_confirmed"
+            ><i class="fas fa-bell-slash"></i></span>
           </div>
-
-          <!-- Кнопки редактирования и удаления -->
           <div class="d-flex">
-            <button 
-              class="btn btn-sm btn-outline-secondary" 
-              @click.stop="startEditingTask(task.id)"
+            <button
+              v-if="task.started && task.settings && task.settings.reminder_enabled && !task.settings.notified && taskCanNotify(task)"
+              class="btn btn-sm btn-outline-info"
+              :title="i18n.mark_notification"
+              @click.stop="markNotified(task.id)"
+            >
+              <i class="fas fa-bell"></i>
+            </button>
+            <button
+              v-if="taskCanEdit(task)"
+              class="btn btn-sm btn-outline-secondary"
+              @click.stop="openTaskModalEdit(task.id)"
             >
               <i class="fas fa-pencil"></i>
             </button>
-            <button 
-              class="btn btn-sm btn-outline-danger" 
-              @click.stop="removeTask(task.id)"
+            <button
+              v-if="taskCanDelete(task)"
+              class="btn btn-sm btn-outline-danger"
+              @click.stop="askRemoveTask(task.id)"
             >
               <i class="fas fa-trash"></i>
             </button>
           </div>
         </h2>
 
-        <!-- Детали задачи (разворачиваемый блок) -->
-        <div 
-          :id="'collapse' + task.id" 
-          class="accordion-collapse collapse" 
+        <div
+          :id="'collapse' + task.id"
+          class="accordion-collapse collapse"
           :class="{ show: expandedTaskId === task.id }"
           :aria-labelledby="'heading' + task.id"
         >
           <div class="accordion-body">
-            <!-- Режим редактирования -->
-            <div v-if="editingTaskId === task.id">
-              <input 
-                type="text" 
-                class="form-control mb-2" 
-                v-model="task.title" 
-                placeholder="Название задачи"
-              />
-              <textarea 
-                class="form-control mb-2" 
-                v-model="task.notes" 
-                placeholder="Описание задачи"
-              ></textarea>
-              <button class="btn btn-primary me-2" @click="saveTask(task.id)">Save</button>
-              <button class="btn btn-secondary" @click="cancelEditTask(task.id)">Cancel</button>
-            </div>
-            <!-- Режим просмотра -->
-            <div v-else>
-              <p class="notes" v-if="task.notes">[[ task.notes ]]</p>
-              <p class="notes text-muted" v-else>No notes available</p>
+            <p class="notes" v-if="task.notes">[[ task.notes ]]</p>
+            <p class="notes text-muted" v-else>{{ _('No description') }}</p>
+            <div class="small text-muted mt-2 todo-task-meta">
+              <div v-if="taskStart(task)">
+                <i class="far fa-calendar-plus me-1"></i>{{ _('Start') }}: [[ formatTaskWhen(task, taskStart(task)) ]]
+              </div>
+              <div v-if="task.finished" class="mt-1">
+                <i class="far fa-calendar-check me-1"></i>{{ _('Finish') }}: [[ formatTaskWhen(task, task.finished) ]]
+              </div>
+              <div v-if="taskDurationLabel(task)" class="mt-1">
+                <i class="far fa-clock me-1"></i>[[ taskDurationLabel(task) ]]
+              </div>
+              <div v-if="task.priority > 0" class="mt-1">
+                <i class="fas fa-flag me-1"></i>[[ priorityLabel(task.priority) ]]
+              </div>
+              <div v-if="task.list_id" class="mt-1">
+                <i class="fas fa-list me-1"></i>{{ _('List') }}: [[ listTitle(task.list_id) ]]
+              </div>
+              <div v-if="task.created_by" class="mt-1">
+                <i class="fas fa-user me-1"></i>{{ _('Creator') }}: [[ task.created_by ]]
+              </div>
+              <div v-if="task.assignee" class="mt-1">
+                <i class="fas fa-user-check me-1"></i>{{ _('Assignee') }}: [[ task.assignee ]]
+              </div>
+              <div v-if="task.viewers && task.viewers.length" class="mt-1">
+                <i class="fas fa-eye me-1"></i>{{ _('Viewers') }}: [[ task.viewers.join(', ') ]]
+              </div>
             </div>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Кнопка добавления задачи -->
-    <button class="btn btn-outline-success mt-3" @click="addTask(currentTab)"><i class="fas fa-plus me-2"></i>Task</button>
+    <p v-if="filteredTasks.length === 0" class="text-muted">{{ _('No tasks') }}</p>
   </div>
 
-  <!-- Модальное окно для редактирования названия списка -->
-  <div class="modal fade" id="editModal" tabindex="-1" aria-labelledby="editModalLabel" aria-hidden="true">
-    <div class="modal-dialog">
+  <!-- Модальное окно создания/редактирования задачи -->
+  <div class="modal fade" id="taskModal" tabindex="-1" aria-labelledby="taskModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
       <div class="modal-content">
         <div class="modal-header">
-          <h5 class="modal-title" id="editModalLabel">Edit name list</h5>
+          <h5 class="modal-title" id="taskModalLabel">[[ taskModalTitle ]]</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
-          <input 
-            type="text" 
-            class="form-control" 
-            v-model="editingName" 
-            placeholder="New name"
-          />
+          <ul class="nav nav-tabs mb-3">
+            <li class="nav-item">
+              <a class="nav-link" :class="{ active: taskModalTab === 'main' }" href="#" @click.prevent="taskModalTab = 'main'">{{ _('Main') }}</a>
+            </li>
+            <li class="nav-item" v-if="taskForm.has_dates">
+              <a class="nav-link" :class="{ active: taskModalTab === 'settings' }" href="#" @click.prevent="taskModalTab = 'settings'">{{ _('Settings') }}</a>
+            </li>
+          </ul>
+
+          <div v-show="taskModalTab === 'main'">
+          <div class="mb-2">
+            <label class="form-label small mb-0">{{ _('Title') }}</label>
+            <input
+              type="text"
+              class="form-control"
+              v-model="taskForm.title"
+              :disabled="!taskFormCanEdit"
+              placeholder="{{ _('Task title') }}"
+              @keyup.enter="saveTaskModal"
+            />
+          </div>
+          <div class="mb-2">
+            <label class="form-label small mb-0">{{ _('Description') }}</label>
+            <textarea
+              class="form-control"
+              v-model="taskForm.notes"
+              :disabled="!taskFormCanEdit"
+              rows="4"
+              placeholder="{{ _('Task description') }}"
+            ></textarea>
+          </div>
+          <div class="row g-2 mb-2">
+            <div class="col-sm-6" v-if="taskFormCanEdit">
+              <label class="form-label small mb-0">{{ _('List') }}</label>
+              <select class="form-select" v-model.number="taskForm.list_id">
+                <option v-for="list in moveTargetLists" :key="'task-list-' + list.id" :value="list.id">[[ list.title ]]</option>
+              </select>
+            </div>
+            <div class="col-sm-6" v-else-if="taskForm.list_id">
+              <label class="form-label small mb-0">{{ _('List') }}</label>
+              <input type="text" class="form-control" :value="listTitle(taskForm.list_id)" readonly />
+            </div>
+          </div>
+          <div class="row g-2">
+            <div class="col-12">
+              <div class="form-check mb-2">
+                <input
+                  class="form-check-input"
+                  type="checkbox"
+                  id="taskHasDates"
+                  v-model="taskForm.has_dates"
+                  @change="onHasDatesToggle"
+                />
+                <label class="form-check-label" for="taskHasDates">{{ _('Set start date (otherwise just a note)') }}</label>
+              </div>
+            </div>
+            <template v-if="taskForm.has_dates">
+            <div class="col-sm-6">
+              <div class="d-flex justify-content-between align-items-center mb-1">
+                <label class="form-label small mb-0">{{ _('Start') }}</label>
+                <div class="form-check mb-0">
+                  <input
+                    class="form-check-input"
+                    type="checkbox"
+                    id="taskAllDay"
+                    v-model="taskForm.all_day"
+                    @change="onAllDayToggle"
+                  />
+                  <label class="form-check-label small" for="taskAllDay">{{ _('All day') }}</label>
+                </div>
+              </div>
+              <input
+                v-if="taskForm.all_day"
+                type="date"
+                class="form-control"
+                v-model="taskForm._startedDateInput"
+              />
+              <input
+                v-else
+                type="datetime-local"
+                class="form-control"
+                v-model="taskForm._startedInput"
+              />
+            </div>
+            <div class="col-sm-6">
+              <label class="form-label small mb-0">{{ _('Finish (plan)') }}</label>
+              <input
+                v-if="taskForm.all_day"
+                type="date"
+                class="form-control"
+                v-model="taskForm._finishedDateInput"
+              />
+              <input
+                v-else
+                type="datetime-local"
+                class="form-control"
+                v-model="taskForm._finishedInput"
+              />
+            </div>
+            </template>
+          </div>
+          <div class="row g-2 mt-1">
+            <div class="col-sm-6">
+              <label class="form-label small mb-0">{{ _('Priority') }}</label>
+              <select class="form-select" v-model.number="taskForm.priority" :disabled="!taskFormCanEdit">
+                <option :value="0">{{ _('Low') }}</option>
+                <option :value="1">{{ _('Normal') }}</option>
+                <option :value="2">{{ _('High') }}</option>
+                <option :value="3">{{ _('Urgent') }}</option>
+              </select>
+            </div>
+            <div class="col-sm-6" v-if="taskFormCanEdit">
+              <label class="form-label small mb-0">{{ _('Assignee') }}</label>
+              <select class="form-select" v-model="taskForm.assignee">
+                <option value="">{{ _('No assignee') }}</option>
+                <option v-for="user in users" :key="'assignee-' + user.username" :value="user.username">[[ user.username ]]</option>
+              </select>
+            </div>
+            <div class="col-12" v-if="taskFormCanEdit">
+              <label class="form-label small mb-0">{{ _('Read-only viewers') }}</label>
+              <select
+                id="taskViewersSelect"
+                ref="taskViewersSelect"
+                class="todo-awaiting-choices"
+                :data-select-all-label="i18n.select_all_users"
+                :data-clear-label="i18n.clear_selected_users"
+                multiple
+              >
+                <option
+                  v-for="user in users"
+                  :key="'viewer-' + user.username"
+                  :value="user.username"
+                  :data-avatar-url="user.avatar_url"
+                >[[ user.username ]]</option>
+              </select>
+            </div>
+          </div>
+          </div>
+
+          <div v-show="taskModalTab === 'settings' && taskForm.has_dates">
+            <div class="form-check mb-3">
+              <input class="form-check-input" type="checkbox" id="reminderEnabled" v-model="taskForm.settings.reminder_enabled" />
+              <label class="form-check-label" for="reminderEnabled">{{ _('Enable reminder (via Scheduler)') }}</label>
+            </div>
+            <div class="mb-2" v-if="taskForm.settings.reminder_enabled">
+              <label class="form-label small mb-0">{{ _('Minutes before start') }}</label>
+              <input type="number" min="0" class="form-control" v-model.number="taskForm.settings.reminder_offset_minutes" />
+            </div>
+            <div class="mb-2">
+              <label class="form-label small mb-0">{{ _('Reminder code') }}</label>
+              <textarea class="form-control font-monospace" rows="4" v-model="taskForm.settings.reminder_code" placeholder="{{ _('Empty - use default code from plugin settings') }}"></textarea>
+              <div class="form-text">{{ _("Available: task, task['title'], task_id, event, params, logger") }}</div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small mb-0">{{ _('Task start code') }}</label>
+              <textarea class="form-control font-monospace" rows="4" v-model="taskForm.settings.start_code" placeholder="{{ _('Empty - use default code from plugin settings') }}"></textarea>
+              <div class="form-text">{{ _('Runs at "Start" date via Scheduler') }}</div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small mb-0">{{ _('Task finish code') }}</label>
+              <textarea class="form-control font-monospace" rows="4" v-model="taskForm.settings.finish_code" placeholder="{{ _('Empty - use default code from plugin settings') }}"></textarea>
+              <div class="form-text">{{ _('Runs at "Finish" date via Scheduler') }}</div>
+            </div>
+            <div v-if="!taskFormIsNew && taskForm.settings.notified" class="alert alert-info py-2 small mb-0">
+              {{ _('Notification marked as delivered') }}
+            </div>
+          </div>
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" @click="cancelEdit">Cancel</button>
-          <button type="button" class="btn btn-primary" @click="saveEdit">OK</button>
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ _('Cancel') }}</button>
+          <button
+            v-if="taskFormCanEdit"
+            type="button"
+            class="btn btn-primary"
+            :disabled="!taskForm.title.trim()"
+            @click="saveTaskModal"
+          >
+            {{ _('Save') }}
+          </button>
         </div>
       </div>
     </div>
   </div>
 
+  <!-- Модальное окно редактирования списка -->
+  <div class="modal fade" id="editModal" tabindex="-1" aria-labelledby="editModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="editModalLabel">[[ listModalTitle ]]</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <input
+            type="text"
+            class="form-control"
+            v-model="editingName"
+            placeholder="{{ _('List title') }}"
+            @keyup.enter="saveEdit"
+          />
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" @click="cancelEdit">{{ _('Cancel') }}</button>
+          <button type="button" class="btn btn-primary" :disabled="!editingName.trim()" @click="saveEdit">{{ _('Save') }}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Подтверждение удаления -->
+  <div class="modal fade" id="confirmModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">[[ confirmTitle ]]</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">[[ confirmMessage ]]</div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ _('Cancel') }}</button>
+          <button type="button" class="btn btn-danger" @click="confirmAction">{{ _('Delete') }}</button>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
 <script>
   new Vue({
     el: '#list_tasks',
-    delimiters: ['[[', ']]'], // Измененные разделители
+    delimiters: ['[[', ']]'],
     data: {
-      search: '',
-      sortKey: 'runtime',
-      sortAsc: true,
+      i18n: {{ todo_i18n|tojson }},
       tasks: [],
       lists: [],
-      selectedList: null,
-      currentTab:0,
+      currentTab: 0,
       loading: false,
       error: null,
-      editingIndex:0,
-      editingName:"",
-      expandedTaskId: null, // ID раскрытой задачи
-      editingTaskId: null, // ID задачи в режиме редактирования
-      taskBackup: {} // Резервная копия задачи для отмены изменений
+      listFormIsNew: false,
+      editingIndex: null,
+      editingName: '',
+      expandedTaskId: null,
+      taskFormIsNew: true,
+      taskModalTab: 'main',
+      taskForm: {
+        id: null,
+        list_id: null,
+        title: '',
+        notes: '',
+        priority: 1,
+        all_day: false,
+        has_dates: false,
+        _startedInput: '',
+        _startedDateInput: '',
+        _finishedInput: '',
+        _finishedDateInput: '',
+        settings: {
+          reminder_enabled: false,
+          reminder_offset_minutes: 15,
+          reminder_code: '',
+          start_code: '',
+          finish_code: '',
+          notified: false,
+        },
+      },
+      sortKey: 'title',
+      sortAsc: true,
+      completedBottom: true,
+      hideCompleted: false,
+      confirmTitle: '',
+      confirmMessage: '',
+      confirmCallback: null,
+      dragListIndex: null,
+      dragOverIndex: null,
+      users: [],
+      currentUser: null,
     },
     async created() {
-      await this.fetchLists()
-      await this.fetchTasks()
+      await Promise.all([this.fetchLists(), this.fetchUsers(), this.fetchCurrentUser()]);
+      await this.fetchTasks();
     },
     mounted() {
-      if (localStorage.scheduler_search) {
-        this.search = localStorage.scheduler_search;
+      const prefs = [
+        ['todo_sortKey', 'sortKey'],
+        ['todo_sortAsc', 'sortAsc', true],
+        ['todo_completedBottom', 'completedBottom', true],
+        ['todo_hideCompleted', 'hideCompleted', true],
+      ];
+      prefs.forEach(([key, field, asBool]) => {
+        const val = localStorage.getItem(key);
+        if (val !== null) {
+          this[field] = asBool ? val === 'true' : val;
+        }
+      });
+      if (this.sortKey === 'deadline') {
+        this.sortKey = 'finished';
+        localStorage.todo_sortKey = 'finished';
       }
-      if (localStorage.scheduler_sortKey) {
-        this.sortKey = localStorage.scheduler_sortKey;
-      }
-      if (localStorage.scheduler_sortAsc) {
-        this.sortAsc = localStorage.scheduler_sortAsc;
+      const taskModalEl = document.getElementById('taskModal');
+      if (taskModalEl) {
+        taskModalEl.addEventListener('hidden.bs.modal', () => {
+          this.destroyViewersSelect();
+        });
       }
     },
     watch: {
-      search(value) {
-        localStorage.scheduler_search = value;
-      },
-      sortKey(value) {
-        localStorage.scheduler_sortKey = value;
-      },
-      sortAsc(value) {
-        localStorage.scheduler_sortAsc = value;
-      },
+      sortKey(value) { localStorage.todo_sortKey = value; },
+      sortAsc(value) { localStorage.todo_sortAsc = value; },
+      completedBottom(value) { localStorage.todo_completedBottom = value; },
+      hideCompleted(value) { localStorage.todo_hideCompleted = value; },
     },
     computed: {
-        // Фильтруем задачи для текущего списка
-        filteredTasks() {
-          const currentListId = this.lists[this.currentTab]?.id;
-          return this.tasks.filter(task => task.list_id === currentListId);
-        },
-      filteredData() {
-        let data = this.tasks;
+      filteredTasks() {
+        const currentListId = this.lists[this.currentTab]?.id;
+        if (!currentListId) return [];
 
-        if (this.search) {
-          data = data.filter(row =>
-            Object.values(row).some(val =>
-              String(val).toLowerCase().includes(this.search.toLowerCase())
-            )
-          );
+        let data = this.tasks.filter(task => task.list_id === currentListId);
+        if (this.hideCompleted) {
+          data = data.filter(task => !task.completed);
         }
 
-        if (this.sortKey) {
-          data = data.slice().sort((a, b) => {
-            let aVal = a[this.sortKey];
-            let bVal = b[this.sortKey];
-
-            if (aVal < bVal) return this.sortAsc ? -1 : 1;
-            if (aVal > bVal) return this.sortAsc ? 1 : -1;
-            return 0;
-          });
-        }
-
+        const asc = this.sortAsc ? 1 : -1;
+        data = data.slice().sort((a, b) => {
+          if (this.completedBottom && !!a.completed !== !!b.completed) {
+            return a.completed ? 1 : -1;
+          }
+          let cmp = 0;
+          if (this.sortKey === 'title') {
+            cmp = (a.title || '').localeCompare(b.title || '', 'ru');
+          } else if (this.sortKey === 'finished') {
+            cmp = this.finishedSortValue(a.finished) - this.finishedSortValue(b.finished);
+          } else if (this.sortKey === 'priority') {
+            cmp = (a.priority || 0) - (b.priority || 0);
+          }
+          if (cmp === 0) return (a.id || 0) - (b.id || 0);
+          return cmp * asc;
+        });
         return data;
+      },
+      taskModalTitle() {
+        return this.taskFormIsNew ? this.i18n.new_task : this.i18n.edit_task;
+      },
+      listModalTitle() {
+        return this.listFormIsNew ? this.i18n.new_list : this.i18n.edit_list;
+      },
+      taskFormCanEdit() {
+        return this.taskFormIsNew || this.taskCanEdit(this.taskForm);
+      },
+      currentList() {
+        return this.lists[this.currentTab] || null;
+      },
+      currentListCanCreateTask() {
+        return !!this.listPerms(this.currentList).can_create_task;
+      },
+      moveTargetLists() {
+        const currentId = this.taskForm.list_id;
+        return this.lists.filter(list => (
+          list.id === currentId || this.listPerms(list).can_create_task
+        ));
       },
     },
     methods: {
-      fetchLists() {
-        this.loading = true
-        axios.get(`/api/Todo/lists`)
+      taskPerms(task) {
+        return (task && task.permissions) || {};
+      },
+      taskCanEdit(task) {
+        return !!this.taskPerms(task).can_edit;
+      },
+      taskCanComplete(task) {
+        return !!this.taskPerms(task).can_complete;
+      },
+      taskCanDelete(task) {
+        return !!this.taskPerms(task).can_delete;
+      },
+      taskCanNotify(task) {
+        return !!this.taskPerms(task).can_notify;
+      },
+      listPerms(list) {
+        return (list && list.permissions) || {};
+      },
+      listCanEdit(list) {
+        return !!this.listPerms(list).can_edit;
+      },
+      listCanDelete(list) {
+        return !!this.listPerms(list).can_delete;
+      },
+      listCanReorder(list) {
+        return !!this.listPerms(list).can_reorder;
+      },
+      listTitle(listId) {
+        const list = this.lists.find(item => item.id === listId);
+        return list ? list.title : '';
+      },
+      normalizeList(list) {
+        const item = { ...list };
+        item.created_by = item.created_by || '';
+        item.permissions = item.permissions || {};
+        return item;
+      },
+      fetchUsers() {
+        return axios.get('/api/Todo/users')
           .then(response => {
-            this.lists = response.data.result
-            this.loading = false
+            this.users = (response.data.result || []).map(user => {
+              if (typeof user === 'string') {
+                return { username: user, avatar_url: '/Users/static/Users.png' };
+              }
+              return {
+                username: user.username,
+                avatar_url: user.avatar_url || '/Users/static/Users.png',
+              };
+            });
           })
           .catch(error => {
-            console.log(error)
-            this.error = error
-            this.loading = false
+            console.log(error);
+          });
+      },
+      fetchCurrentUser() {
+        return axios.get('/api/user')
+          .then(response => {
+            this.currentUser = response.data.result || null;
           })
-          ;
+          .catch(error => {
+            console.log(error);
+          });
+      },
+      async refresh() {
+        if (this.loading) return;
+        this.loading = true;
+        try {
+          const activeListId = this.lists[this.currentTab]?.id;
+          const [listsRes, tasksRes] = await Promise.all([
+            axios.get('/api/Todo/lists'),
+            axios.get('/api/Todo/tasks'),
+          ]);
+          this.lists = (listsRes.data.result || []).map(list => this.normalizeList(list));
+          if (activeListId != null) {
+            const newTab = this.lists.findIndex(l => l.id === activeListId);
+            this.currentTab = newTab >= 0 ? newTab : Math.max(0, this.lists.length - 1);
+          } else if (this.currentTab >= this.lists.length) {
+            this.currentTab = Math.max(0, this.lists.length - 1);
+          }
+          this.tasks = (tasksRes.data.result || []).map(task => this.normalizeTask(task));
+        } catch (error) {
+          console.log(error);
+          this.error = error;
+        } finally {
+          this.loading = false;
+        }
+      },
+      fetchLists() {
+        this.loading = true;
+        return axios.get('/api/Todo/lists')
+          .then(response => {
+            this.lists = (response.data.result || []).map(list => this.normalizeList(list));
+            if (this.currentTab >= this.lists.length) {
+              this.currentTab = Math.max(0, this.lists.length - 1);
+            }
+            this.loading = false;
+          })
+          .catch(error => {
+            console.log(error);
+            this.error = error;
+            this.loading = false;
+          });
       },
       fetchTasks() {
-        this.loading = true
-        axios.get(`/api/Todo/tasks`)
+        this.loading = true;
+        return axios.get('/api/Todo/tasks')
           .then(response => {
-            this.tasks = response.data.result
-            this.loading = false
+            this.tasks = (response.data.result || []).map(task => this.normalizeTask(task));
+            this.loading = false;
           })
           .catch(error => {
-            console.log(error)
-            this.error = error
-            this.loading = false
-          })
-          ;
+            console.log(error);
+            this.error = error;
+            this.loading = false;
+          });
       },
-      sortBy(key) {
-        if (this.sortKey === key) {
-          this.sortAsc = !this.sortAsc;
+      normalizeTask(task) {
+        const item = { ...task };
+        if (item.priority === null || item.priority === undefined) {
+          item.priority = 1;
+        }
+        item.settings = this.normalizeTaskSettings(item.settings);
+        item.viewers = Array.isArray(item.viewers) ? item.viewers : [];
+        item.assignee = item.assignee || '';
+        item.created_by = item.created_by || '';
+        item._startedInput = this.toDatetimeLocal(item.started);
+        item._startedDateInput = this.toDateInput(item.started);
+        item._finishedInput = this.toDatetimeLocal(item.finished);
+        item._finishedDateInput = this.toDateInput(item.finished);
+        item.all_day = !!item.all_day;
+        return item;
+      },
+      normalizeTaskSettings(settings) {
+        const defaults = {
+          reminder_enabled: false,
+          reminder_offset_minutes: 15,
+          reminder_code: '',
+          start_code: '',
+          finish_code: '',
+          notified: false,
+        };
+        if (!settings || typeof settings !== 'object') {
+          return { ...defaults };
+        }
+        return {
+          ...defaults,
+          ...settings,
+          reminder_enabled: !!settings.reminder_enabled,
+          reminder_offset_minutes: Number(settings.reminder_offset_minutes ?? 15),
+          notified: !!settings.notified,
+        };
+      },
+      parseDateTime(value) {
+        if (!value) return null;
+        const text = String(value).trim().replace(' ', 'T');
+        const d = new Date(text);
+        return Number.isNaN(d.getTime()) ? null : d;
+      },
+      toDatetimeLocal(value) {
+        if (!value) return '';
+        const d = this.parseDateTime(value);
+        if (!d) return '';
+        const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+        return local.toISOString().slice(0, 16);
+      },
+      toDateInput(value) {
+        if (!value) return '';
+        const text = String(value).slice(0, 10);
+        return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : '';
+      },
+      nowDateInput() {
+        const d = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      },
+      fromDateInput(value) {
+        if (!value) return null;
+        return `${value} 00:00:00`;
+      },
+      formatDateOnly(value) {
+        const d = this.parseDateTime(value);
+        if (!d) return '';
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`;
+      },
+      formatTaskWhen(task, value) {
+        if (!value) return '';
+        return task.all_day ? this.formatDateOnly(value) : this.formatDateTime(value);
+      },
+      onHasDatesToggle() {
+        if (this.taskForm.has_dates) {
+          if (!this.taskForm._startedInput && !this.taskForm._startedDateInput) {
+            this.taskForm._startedInput = this.nowDatetimeLocal();
+            this.taskForm._startedDateInput = this.nowDateInput();
+          }
         } else {
-          this.sortKey = key;
-          this.sortAsc = true;
+          this.taskForm._startedInput = '';
+          this.taskForm._startedDateInput = '';
+          this.taskForm._finishedInput = '';
+          this.taskForm._finishedDateInput = '';
+          this.taskForm.settings.reminder_enabled = false;
+          this.taskForm.settings.notified = false;
+          if (this.taskModalTab === 'settings') {
+            this.taskModalTab = 'main';
+          }
         }
       },
-      getSortClass(key) {
-        if (this.sortKey === key) {
-          return this.sortAsc ? 'sortable asc' : 'sortable desc';
+      onAllDayToggle() {
+        if (this.taskForm.all_day) {
+          const source = this.taskForm._startedInput || this.nowDatetimeLocal();
+          this.taskForm._startedDateInput = this.toDateInput(source.replace('T', ' ')) || this.nowDateInput();
+          if (this.taskForm._finishedInput) {
+            this.taskForm._finishedDateInput = this.toDateInput(this.taskForm._finishedInput.replace('T', ' '));
+          }
         } else {
-          return '';
+          if (this.taskForm._startedDateInput) {
+            this.taskForm._startedInput = `${this.taskForm._startedDateInput}T00:00`;
+          }
+          if (this.taskForm._finishedDateInput) {
+            this.taskForm._finishedInput = `${this.taskForm._finishedDateInput}T23:59`;
+          }
         }
       },
-      // Добавление нового списка
-      async addList() {
-          const list = {
-            title: 'Новый список',
+      buildTaskForm(task, isNew) {
+        const started = task && !isNew ? task.started : null;
+        const finished = task && !isNew ? task.finished : null;
+        const hasDates = !!started;
+        const allDay = isNew ? false : !!task.all_day;
+        const settings = this.normalizeTaskSettings(isNew ? null : task.settings);
+        return {
+          id: isNew ? null : task.id,
+          list_id: isNew ? task.list_id : task.list_id,
+          title: isNew ? '' : (task.title || ''),
+          notes: isNew ? '' : (task.notes || ''),
+          priority: isNew ? 1 : (task.priority ?? 1),
+          assignee: isNew ? '' : (task.assignee || ''),
+          viewers: isNew ? [] : (Array.isArray(task.viewers) ? [...task.viewers] : []),
+          permissions: isNew ? { can_edit: true } : (task.permissions || {}),
+          all_day: allDay,
+          has_dates: hasDates,
+          _startedInput: hasDates ? this.toDatetimeLocal(started) : '',
+          _startedDateInput: hasDates ? this.toDateInput(started) : '',
+          _finishedInput: hasDates ? this.toDatetimeLocal(finished) : '',
+          _finishedDateInput: hasDates ? this.toDateInput(finished) : '',
+          settings,
+        };
+      },
+      nowDatetimeLocal() {
+        return this.toDatetimeLocal(new Date().toISOString());
+      },
+      fromDatetimeLocal(value) {
+        if (!value) return null;
+        const text = value.replace('T', ' ');
+        return text.length === 16 ? `${text}:00` : text;
+      },
+      taskStart(task) {
+        return task.started || null;
+      },
+      formatDurationMs(ms) {
+        const abs = Math.max(0, Math.abs(ms));
+        const days = Math.floor(abs / 86400000);
+        let rest = abs % 86400000;
+        const hours = Math.floor(rest / 3600000);
+        rest %= 3600000;
+        const minutes = Math.floor(rest / 60000);
+        const parts = [];
+        if (days) parts.push(`${days} ${this.i18n.days_short}`);
+        if (hours) parts.push(`${hours} ${this.i18n.hours_short}`);
+        if (minutes || !parts.length) parts.push(`${minutes} ${this.i18n.minutes_short}`);
+        return parts.join(' ');
+      },
+      formatDurationBetween(from, to, allDay) {
+        const start = this.parseDateTime(from);
+        const end = this.parseDateTime(to);
+        if (!start || !end || end < start) return '';
+        if (allDay) {
+          const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+          const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+          const days = Math.round((endDay - startDay) / 86400000) + 1;
+          return `${days} ${this.i18n.days_short}`;
+        }
+        return this.formatDurationMs(end - start);
+      },
+      taskDurationLabel(task) {
+        const start = this.taskStart(task);
+        if (!start) return '';
+        if (task.finished) {
+          const duration = this.formatDurationBetween(start, task.finished, task.all_day);
+          return duration ? `${this.i18n.duration}: ${duration}` : '';
+        }
+        const elapsed = this.formatDurationBetween(start, new Date().toISOString(), task.all_day);
+        return elapsed ? `${this.i18n.in_progress}: ${elapsed}` : '';
+      },
+      finishedSortValue(value) {
+        if (!value) return Number.MAX_SAFE_INTEGER;
+        const dt = this.parseDateTime(value);
+        if (!dt) return Number.MAX_SAFE_INTEGER;
+        return dt.getTime();
+      },
+      formatDateTime(value) {
+        if (!value) return '';
+        const d = this.parseDateTime(value);
+        if (!d) return String(value);
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      },
+      priorityLabel(priority) {
+        const labels = [
+          this.i18n.priority_low,
+          this.i18n.priority_normal,
+          this.i18n.priority_high,
+          this.i18n.priority_urgent,
+        ];
+        return labels[priority] || this.i18n.priority_normal;
+      },
+      priorityClass(priority) {
+        if (priority >= 3) return 'bg-danger';
+        if (priority === 2) return 'bg-warning text-dark';
+        if (priority === 0) return 'bg-secondary';
+        return 'bg-light text-dark';
+      },
+      showConfirm(title, message, callback) {
+        this.confirmTitle = title;
+        this.confirmMessage = message;
+        this.confirmCallback = callback;
+        const modal = new bootstrap.Modal(document.getElementById('confirmModal'));
+        modal.show();
+        this._confirmModal = modal;
+      },
+      confirmAction() {
+        if (this.confirmCallback) {
+          this.confirmCallback();
+        }
+        if (this._confirmModal) {
+          this._confirmModal.hide();
+        }
+        this.confirmCallback = null;
+      },
+      openListModalCreate() {
+        this.listFormIsNew = true;
+        this.editingIndex = null;
+        this.editingName = '';
+        this.showListModal();
+      },
+      showListModal() {
+        const el = document.getElementById('editModal');
+        if (!this._listModal) {
+          this._listModal = new bootstrap.Modal(el);
+        }
+        this._listModal.show();
+        this.$nextTick(() => {
+          const input = el.querySelector('input[type="text"]');
+          if (input) input.focus();
+        });
+      },
+      openTaskModalCreate(listIndex) {
+        const list = this.lists[listIndex];
+        if (!list) return;
+        this.taskFormIsNew = true;
+        this.taskModalTab = 'main';
+        this.taskForm = this.buildTaskForm({ list_id: list.id }, true);
+        this.showTaskModal();
+      },
+      openTaskModalEdit(taskId) {
+        const task = this.tasks.find(t => t.id === taskId);
+        if (!task) return;
+        this.taskFormIsNew = false;
+        this.taskModalTab = 'main';
+        this.taskForm = this.buildTaskForm(task, false);
+        this.showTaskModal();
+      },
+      showTaskModal() {
+        const el = document.getElementById('taskModal');
+        if (!this._taskModal) {
+          this._taskModal = new bootstrap.Modal(el);
+        }
+        this._taskModal.show();
+        this.$nextTick(() => {
+          const input = el.querySelector('input[type="text"]');
+          if (input) input.focus();
+          this.initViewersSelect();
+        });
+      },
+      closeTaskModal() {
+        this.destroyViewersSelect();
+        const modal = bootstrap.Modal.getInstance(document.getElementById('taskModal'));
+        if (modal) modal.hide();
+      },
+      initViewersSelect() {
+        if (!this.taskFormCanEdit) return;
+        const selectEl = this.$refs.taskViewersSelect;
+        if (!selectEl || !window.TodoUsersMultiSelect) return;
+        Array.prototype.forEach.call(selectEl.options, (opt) => {
+          opt.selected = (this.taskForm.viewers || []).includes(opt.value);
+        });
+        window.TodoUsersMultiSelect.init(selectEl);
+      },
+      destroyViewersSelect() {
+        const selectEl = this.$refs.taskViewersSelect;
+        if (selectEl && window.TodoUsersMultiSelect) {
+          window.TodoUsersMultiSelect.destroy(selectEl);
+        }
+      },
+      getViewersFromSelect() {
+        const selectEl = this.$refs.taskViewersSelect;
+        if (!selectEl || !window.TodoUsersMultiSelect) {
+          return this.taskForm.viewers || [];
+        }
+        return window.TodoUsersMultiSelect.getValues(selectEl);
+      },
+      async saveTaskModal() {
+        const title = (this.taskForm.title || '').trim();
+        if (!title) return;
+        const payload = {
+          list_id: this.taskForm.list_id,
+          title,
+          notes: this.taskForm.notes || '',
+          priority: this.taskForm.priority,
+          assignee: this.taskForm.assignee || null,
+          viewers: this.getViewersFromSelect(),
+          all_day: !!this.taskForm.all_day,
+          started: this.taskForm.has_dates
+            ? (this.taskForm.all_day
+              ? this.fromDateInput(this.taskForm._startedDateInput)
+              : this.fromDatetimeLocal(this.taskForm._startedInput))
+            : null,
+          finished: this.taskForm.has_dates
+            ? (this.taskForm.all_day
+              ? this.fromDateInput(this.taskForm._finishedDateInput)
+              : this.fromDatetimeLocal(this.taskForm._finishedInput))
+            : null,
+          settings: { ...this.taskForm.settings },
+        };
+        if (this.taskFormIsNew) {
+          const res = await axios.post('/api/Todo/task/0', payload);
+          if (!res.data.success) return;
+          this.tasks.push(this.normalizeTask(res.data.result));
+        } else {
+          payload.id = this.taskForm.id;
+          const res = await axios.post(`/api/Todo/task/${this.taskForm.id}`, payload);
+          if (!res.data.success) return;
+          const taskIndex = this.tasks.findIndex(t => t.id === this.taskForm.id);
+          if (taskIndex >= 0) {
+            this.$set(this.tasks, taskIndex, this.normalizeTask(res.data.result));
           }
-          // API add list (return id)
-          const res = await axios.post(`/api/Todo/list/0`, list)
-          if (res.data.success)
-          {
-            this.lists.push(res.data.result);
-            this.currentTab = this.lists.length - 1;
-          }
-        },
-        // Добавление новой задачи в текущий список
-        async addTask(listIndex) {
-          var newTask = {
-            list_id: this.lists[listIndex].id,
-            title: 'Новая задача',
-          };
-          // API add task (return id)
-          const res = await axios.post(`/api/Todo/task/0`, newTask)
-          if (res.data.success)
-          {
-            this.tasks.push(res.data.result);
-          }
-        },
-        // Удаление задачи из списка
-        async removeTask(taskId) {
-          // API remove task
-          const res = await axios.delete(`/api/Todo/task/`+taskId)
-          if (!res.data.success)
-            return
-          this.tasks = this.tasks.filter(task => task.id !== taskId);
-          if (this.editingTaskId === taskId) {
-            this.cancelEditTask(taskId); // Отменяем редактирование
-          }
-        },
-        async complete(taskId){
-          const res = await axios.get(`/api/Todo/task/`+taskId+`/complete`)
-          if (!res.data.success)
-            return
-          const taskIndex = this.tasks.findIndex(task => task.id === taskId);
-          // Создаём копию массива tasks
-          const updatedTasks = [...this.tasks];
-          // Заменяем задачу по индексу
-          updatedTasks[taskIndex] = res.data.result;
-          // Обновляем массив tasks
-          this.tasks = updatedTasks;
-        },
-        // Начало редактирования задачи
-        startEditingTask(taskId) {
-          const task = this.tasks.find(task => task.id === taskId);
-          if (task) {
-            this.taskBackup = { ...task }; // Создаем резервную копию
-            this.editingTaskId = taskId;
-            this.expandedTaskId = taskId
-          }
-        },
-        // Сохранение изменений задачи
-        async saveTask(taskId) {
-          const task = this.tasks.find(task => task.id === taskId);
-          const res = await axios.post(`/api/Todo/task/`+taskId, task)
-          if (!res.data.success)
-            return
-          this.editingTaskId = null; // Выходим из режима редактирования
-          this.taskBackup = {}; // Очищаем резервную копию
-        },
-        // Отмена редактирования задачи
-        cancelEditTask(taskId) {
-          const taskIndex = this.tasks.findIndex(task => task.id === taskId);
-          if (taskIndex !== -1 && this.taskBackup.id) {
-            this.$set(this.tasks, taskIndex, { ...this.taskBackup });// Восстанавливаем из резервной копии
-            this.editingTaskId = null; // Выходим из режима редактирования
-            this.taskBackup = {}; // Очищаем резервную копию
-          }
-        },
-        // Управление разворачиванием задачи
-        toggleTaskDetails(task) {
-          if (!task.notes) {
-            // Если заметок нет, предотвращаем разворачивание
-            event.stopPropagation();
-            return;
-          }
-
-          // Разрешаем стандартное поведение (разворачивание)
-        },
-        // Открытие модального окна для редактирования названия списка
-        openEditModal(index) {
-          this.editingIndex = index;
-          this.editingName = this.lists[index].title; // Сохраняем текущее название
-          var modal = new bootstrap.Modal(document.getElementById('editModal'));
-          modal.show();
-        },
-        // Сохранение изменений названия списка
-        async saveEdit() {
-          if (this.editingIndex !== null) {
-            this.lists[this.editingIndex].title = this.editingName; // Обновляем название
-            // TODO API save list
-            const res = await axios.post(`/api/Todo/list/`+ this.lists[this.editingIndex].id, this.lists[this.editingIndex])
-          }
-          this.closeModal();
-        },
-        // Отмена редактирования
-        cancelEdit() {
-          this.editingIndex = null; // Сбрасываем индекс
-          this.editingName = ''; // Очищаем временное значение
-        },
-        // Закрытие модального окна
-        closeModal() {
-          var modal = bootstrap.Modal.getInstance(document.getElementById('editModal'));
-          modal.hide();
-          this.cancelEdit();
-        },
-        // Удаление списка
-        async removeList(index) {
-          const id = this.lists[index].id
-          const res = await axios.delete(`/api/Todo/list/`+id)
-          if (!res.data.success)
-            return
-          
-          this.lists.splice(index, 1); // Удаляем список
-          // TODO API delete list
-
-          // Если удалили текущий список, переходим к первому
-          if (this.currentTab === index) {
-            this.currentTab = 0;
-          } else if (this.currentTab > index) {
-            this.currentTab--; // Корректируем индекс текущей вкладки
-          }
-
-        },
-        // Переключение раскрытия задачи
-        toggleTask(taskId) {
-          if (this.expandedTaskId === taskId) {
-            this.expandedTaskId = null; // Свернуть задачу
-          } else {
-            this.expandedTaskId = taskId; // Раскрыть задачу
-          }
-        },
-    }
+        }
+        this.closeTaskModal();
+      },
+      async markNotified(taskId) {
+        const res = await axios.post(`/api/Todo/task/${taskId}/notified`);
+        if (!res.data.success) return;
+        const taskIndex = this.tasks.findIndex(task => task.id === taskId);
+        if (taskIndex >= 0) {
+          this.$set(this.tasks, taskIndex, this.normalizeTask(res.data.result));
+        }
+      },
+      askRemoveTask(taskId) {
+        const task = this.tasks.find(t => t.id === taskId);
+        const title = task ? task.title : this.i18n.task_fallback;
+        this.showConfirm(this.i18n.delete_task_title, this.i18n.delete_task_confirm.replace('{title}', title), () => {
+          this.removeTask(taskId);
+        });
+      },
+      async removeTask(taskId) {
+        const res = await axios.delete(`/api/Todo/task/${taskId}`);
+        if (!res.data.success) return;
+        this.tasks = this.tasks.filter(task => task.id !== taskId);
+        if (this.taskForm.id === taskId) {
+          this.closeTaskModal();
+        }
+      },
+      async complete(taskId) {
+        const task = this.tasks.find(item => item.id === taskId);
+        if (task && !this.taskCanComplete(task)) return;
+        const res = await axios.get(`/api/Todo/task/${taskId}/complete`);
+        if (!res.data.success) return;
+        const taskIndex = this.tasks.findIndex(task => task.id === taskId);
+        const updatedTasks = [...this.tasks];
+        updatedTasks[taskIndex] = this.normalizeTask(res.data.result);
+        this.tasks = updatedTasks;
+      },
+      openEditModal(index) {
+        const list = this.lists[index];
+        if (!list || !this.listCanEdit(list)) return;
+        this.listFormIsNew = false;
+        this.editingIndex = index;
+        this.editingName = this.lists[index].title;
+        this.showListModal();
+      },
+      async saveEdit() {
+        const title = (this.editingName || '').trim();
+        if (!title) return;
+        if (this.listFormIsNew) {
+          const res = await axios.post('/api/Todo/list/0', { title });
+          if (!res.data.success) return;
+          this.lists.push(this.normalizeList(res.data.result));
+          this.currentTab = this.lists.length - 1;
+        } else if (this.editingIndex !== null) {
+          this.lists[this.editingIndex].title = title;
+          await axios.post(`/api/Todo/list/${this.lists[this.editingIndex].id}`, this.lists[this.editingIndex]);
+        }
+        this.closeModal();
+      },
+      cancelEdit() {
+        this.listFormIsNew = false;
+        this.editingIndex = null;
+        this.editingName = '';
+      },
+      closeModal() {
+        const modal = bootstrap.Modal.getInstance(document.getElementById('editModal'));
+        if (modal) modal.hide();
+        this.cancelEdit();
+      },
+      askRemoveList(index) {
+        const list = this.lists[index];
+        const title = list ? list.title : this.i18n.list_fallback;
+        this.showConfirm(this.i18n.delete_list_title, this.i18n.delete_list_confirm.replace('{title}', title), () => {
+          this.removeList(index);
+        });
+      },
+      async removeList(index) {
+        const id = this.lists[index].id;
+        const res = await axios.delete(`/api/Todo/list/${id}`);
+        if (!res.data.success) return;
+        this.lists.splice(index, 1);
+        this.tasks = this.tasks.filter(task => task.list_id !== id);
+        if (this.currentTab === index) {
+          this.currentTab = 0;
+        } else if (this.currentTab > index) {
+          this.currentTab--;
+        }
+      },
+      onListDragStart(index, event) {
+        const list = this.lists[index];
+        if (!list || !this.listCanReorder(list)) {
+          event.preventDefault();
+          return;
+        }
+        this.dragListIndex = index;
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(index));
+      },
+      onListDragOver(index) {
+        if (this.dragListIndex === null || this.dragListIndex === index) return;
+        this.dragOverIndex = index;
+      },
+      async onListDrop(toIndex) {
+        const fromIndex = this.dragListIndex;
+        this.dragOverIndex = null;
+        this.dragListIndex = null;
+        if (fromIndex === null || fromIndex === toIndex) return;
+        await this.reorderLists(fromIndex, toIndex);
+      },
+      onListDragEnd() {
+        this.dragListIndex = null;
+        this.dragOverIndex = null;
+      },
+      async reorderLists(fromIndex, toIndex) {
+        const reordered = [...this.lists];
+        const [item] = reordered.splice(fromIndex, 1);
+        reordered.splice(toIndex, 0, item);
+        const activeListId = this.lists[this.currentTab]?.id;
+        const res = await axios.post('/api/Todo/lists/reorder', { ids: reordered.map(l => l.id) });
+        if (!res.data.success) return;
+        this.lists = (res.data.result || []).map(list => this.normalizeList(list));
+        if (activeListId != null) {
+          const newTab = this.lists.findIndex(l => l.id === activeListId);
+          if (newTab >= 0) this.currentTab = newTab;
+        }
+      },
+      toggleTask(taskId) {
+        this.expandedTaskId = this.expandedTaskId === taskId ? null : taskId;
+      },
+    },
   });
 </script>
 <style>
-  .sortable {
-      cursor: pointer;
-  }
-  .sortable:after {
-      content: '';
-      float: right;
-      margin-left: 5px;
-      border-width: 0 10px 10px;
-      border-style: solid;
-      border-color: transparent transparent #000 transparent;
-  }
-  .sortable.asc:after {
-      border-width: 10px 10px 0;
-      border-color: #000 transparent transparent transparent;
-  }
-  .sortable.desc:after {
-      border-width: 0 10px 10px;
-      border-color: transparent transparent #000 transparent;
+  .todo-toolbar .todo-sort-select {
+    width: auto;
+    min-width: 10rem;
   }
   .notes {
-      white-space: pre-wrap; /* Разрешаем перенос текста */
-      word-break: break-word; /* Разрешаем разрыв длинных слов */
-    }
-/* Стиль для завершённой задачи */
-.task-completed {
-  text-decoration: line-through; /* Перечёркивание текста */
-  color: #888; /* Затенение текста */
-  font-style: italic; /* Опционально: курсив */
-}
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .task-completed {
+    text-decoration: line-through;
+    color: #888;
+    font-style: italic;
+  }
+  .task-item-completed {
+    opacity: 0.75;
+  }
+  .accordion-button:not(.collapsed) {
+    box-shadow: none;
+  }
+  .todo-list-drag-handle {
+    cursor: grab;
+    user-select: none;
+    line-height: 1;
+    padding: 0 2px;
+  }
+  .todo-list-drag-handle:active {
+    cursor: grabbing;
+  }
+  .todo-list-tab.todo-list-dragging {
+    opacity: 0.45;
+  }
+  .todo-list-tab.todo-list-drag-over .nav-link {
+    box-shadow: inset 0 -3px 0 var(--bs-success);
+  }
+  .font-monospace {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.85rem;
+  }
 </style>

@@ -1,0 +1,105 @@
+{% extends "todo_main.html" %}
+{% from "macros/code_editor.html" import render_editor %}
+
+{% block tab %}
+{% if message %}
+<div class="alert alert-{{ message_type or 'success' }} alert-dismissible fade show" role="alert">
+  {{ _(message) }}
+  <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+</div>
+{% endif %}
+
+<p class="text-muted small mb-3">
+  {{ _("Code is executed for tasks with a configured start date. Available variables in code: task (task dict: task['title'], task['notes'], etc.), task_id, event, params, logger. Reminders, start and finish are scheduled via Scheduler.") }}
+</p>
+
+<ul class="nav nav-tabs mb-3" role="tablist">
+  <li class="nav-item">
+    <a class="nav-link {% if settings_stab == 'reminder' %}active{% endif %}" href="Todo?tab=settings&stab=reminder">{{ _('Reminders') }}</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if settings_stab == 'schedule' %}active{% endif %}" href="Todo?tab=settings&stab=schedule">{{ _('Start and finish') }}</a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if settings_stab == 'events' %}active{% endif %}" href="Todo?tab=settings&stab=events">{{ _('Events') }}</a>
+  </li>
+</ul>
+
+<form id="todoSettingsForm" method="POST" action="Todo?tab=settings&stab={{ settings_stab }}">
+  <input type="hidden" name="settings_stab" value="{{ settings_stab }}">
+
+  <div class="{% if settings_stab != 'reminder' %}d-none{% endif %}">
+    <div class="card mb-3">
+      <div class="card-header">{{ _('Default reminder code') }}</div>
+      <div class="card-body">
+        {% set default_reminder_code = {'name': 'default_reminder_code', 'data': settings.get('default_reminder_code', '')} %}
+        {{ render_editor(default_reminder_code, 'python', module_name='Todo') }}
+        <div class="form-text">
+          {{ _('Runs before the task start date when reminder is enabled and no custom code is provided.') }}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="{% if settings_stab != 'schedule' %}d-none{% endif %}">
+    <div class="card mb-3">
+      <div class="card-header">{{ _('Scheduled codes') }}</div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label">{{ _('Task start code') }}</label>
+          {% set default_start_code = {'name': 'default_start_code', 'data': settings.get('default_start_code', '')} %}
+          {{ render_editor(default_start_code, 'python', module_name='Todo') }}
+          <div class="form-text">{{ _('Used when a task does not define custom start code.') }}</div>
+        </div>
+        <div class="mb-0">
+          <label class="form-label">{{ _('Task finish code') }}</label>
+          {% set default_finish_code = {'name': 'default_finish_code', 'data': settings.get('default_finish_code', '')} %}
+          {{ render_editor(default_finish_code, 'python', module_name='Todo') }}
+          <div class="form-text">{{ _('Used when a task does not define custom finish code.') }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="{% if settings_stab != 'events' %}d-none{% endif %}">
+    <div class="card mb-3">
+      <div class="card-header">{{ _('Instant events') }}</div>
+      <div class="card-body">
+        <div class="mb-3">
+          <label class="form-label">{{ _('Task create code') }}</label>
+          {% set code_on_create = {'name': 'code_on_create', 'data': settings.get('code_on_create', '')} %}
+          {{ render_editor(code_on_create, 'python', module_name='Todo') }}
+        </div>
+        <div class="mb-3">
+          <label class="form-label">{{ _('Task delete code') }}</label>
+          {% set code_on_delete = {'name': 'code_on_delete', 'data': settings.get('code_on_delete', '')} %}
+          {{ render_editor(code_on_delete, 'python', module_name='Todo') }}
+        </div>
+        <div class="mb-0">
+          <label class="form-label">{{ _('Code on "notified" mark') }}</label>
+          {% set code_on_notified = {'name': 'code_on_notified', 'data': settings.get('code_on_notified', '')} %}
+          {{ render_editor(code_on_notified, 'python', module_name='Todo') }}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# Скрытые поля остальных вкладок — чтобы при сохранении одной вкладки не терялись остальные #}
+  {% if settings_stab != 'reminder' %}
+  <textarea name="default_reminder_code" class="d-none">{{ settings.get('default_reminder_code', '') }}</textarea>
+  {% endif %}
+  {% if settings_stab != 'schedule' %}
+  <textarea name="default_start_code" class="d-none">{{ settings.get('default_start_code', '') }}</textarea>
+  <textarea name="default_finish_code" class="d-none">{{ settings.get('default_finish_code', '') }}</textarea>
+  {% endif %}
+  {% if settings_stab != 'events' %}
+  <textarea name="code_on_create" class="d-none">{{ settings.get('code_on_create', '') }}</textarea>
+  <textarea name="code_on_delete" class="d-none">{{ settings.get('code_on_delete', '') }}</textarea>
+  <textarea name="code_on_notified" class="d-none">{{ settings.get('code_on_notified', '') }}</textarea>
+  {% endif %}
+
+  <button type="submit" class="btn btn-primary">
+    <i class="fas fa-check me-1"></i>{{ _('Save') }}
+  </button>
+</form>
+{% endblock %}
