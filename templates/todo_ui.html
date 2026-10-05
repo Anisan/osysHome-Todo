@@ -356,12 +356,14 @@
                 type="date"
                 class="form-control"
                 v-model="taskForm._startedDateInput"
+                @change="onStartedInputChange"
               />
               <input
                 v-else
                 type="datetime-local"
                 class="form-control"
                 v-model="taskForm._startedInput"
+                @change="onStartedInputChange"
               />
             </div>
             <div class="col-sm-6">
@@ -371,12 +373,14 @@
                 type="date"
                 class="form-control"
                 v-model="taskForm._finishedDateInput"
+                @change="onFinishedInputChange"
               />
               <input
                 v-else
                 type="datetime-local"
                 class="form-control"
                 v-model="taskForm._finishedInput"
+                @change="onFinishedInputChange"
               />
             </div>
             </template>
@@ -538,6 +542,7 @@
         _startedDateInput: '',
         _finishedInput: '',
         _finishedDateInput: '',
+        _finishAuto: true,
         settings: {
           reminder_enabled: false,
           reminder_offset_minutes: 15,
@@ -847,18 +852,12 @@
             this.taskForm._startedInput = this.nowDatetimeLocal();
             this.taskForm._startedDateInput = this.nowDateInput();
           }
-          if (this.taskForm.all_day && !this.taskForm._finishedDateInput) {
-            this.taskForm._finishedDateInput = this.taskForm._startedDateInput || this.nowDateInput();
-          }
-          if (!this.taskForm.all_day && !this.taskForm._finishedInput) {
-            this.taskForm._finishedInput = this.addMinutesToDatetimeLocal(
-              this.taskForm._startedInput, this.defaultFinishMinutes);
-          }
         } else {
           this.taskForm._startedInput = '';
           this.taskForm._startedDateInput = '';
           this.taskForm._finishedInput = '';
           this.taskForm._finishedDateInput = '';
+          this.taskForm._finishAuto = true;
           this.taskForm.settings.reminder_enabled = false;
           this.taskForm.settings.notified = false;
           if (this.taskModalTab === 'settings') {
@@ -866,15 +865,31 @@
           }
         }
       },
+      applyAutoFinish() {
+        if (!this.taskForm.has_dates || !this.taskForm._finishAuto) {
+          return;
+        }
+        if (this.taskForm.all_day) {
+          this.taskForm._finishedDateInput = this.taskForm._startedDateInput;
+        } else {
+          this.taskForm._finishedInput = this.addMinutesToDatetimeLocal(
+            this.taskForm._startedInput, this.defaultFinishMinutes);
+        }
+      },
+      onStartedInputChange() {
+        this.taskForm._finishAuto = true;
+        this.applyAutoFinish();
+      },
+      onFinishedInputChange() {
+        this.taskForm._finishAuto = false;
+      },
       onAllDayToggle() {
         if (this.taskForm.all_day) {
           const source = this.taskForm._startedInput || this.nowDatetimeLocal();
           this.taskForm._startedDateInput = this.toDateInput(source.replace('T', ' ')) || this.nowDateInput();
           if (this.taskForm._finishedInput) {
             this.taskForm._finishedDateInput = this.toDateInput(this.taskForm._finishedInput.replace('T', ' '));
-          }
-          if (!this.taskForm._finishedDateInput) {
-            this.taskForm._finishedDateInput = this.taskForm._startedDateInput;
+            this.taskForm._finishAuto = false;
           }
         } else {
           if (this.taskForm._startedDateInput) {
@@ -882,8 +897,10 @@
           }
           if (this.taskForm._finishedDateInput) {
             this.taskForm._finishedInput = `${this.taskForm._finishedDateInput}T23:59`;
+            this.taskForm._finishAuto = false;
           }
         }
+        this.applyAutoFinish();
       },
       buildTaskForm(task, isNew) {
         const started = task && !isNew ? task.started : null;
@@ -906,6 +923,7 @@
           _startedDateInput: hasDates ? this.toDateInput(started) : '',
           _finishedInput: hasDates ? this.toDatetimeLocal(finished) : '',
           _finishedDateInput: hasDates ? this.toDateInput(finished) : '',
+          _finishAuto: isNew,
           settings,
         };
       },
