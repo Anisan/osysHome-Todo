@@ -446,8 +446,8 @@
             <div v-if="!taskFormIsNew && taskForm.settings.notified" class="alert alert-info py-2 small mb-0">
               {{ _('Notification marked as delivered') }}
             </div>
-            <div v-if="taskFormError" class="alert alert-danger py-2 small mb-0">[[ taskFormError ]]</div>
           </div>
+          <div v-if="taskFormError" class="alert alert-danger py-2 small mb-0 mt-3">[[ taskFormError ]]</div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ _('Cancel') }}</button>
