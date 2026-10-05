@@ -48,6 +48,8 @@
   'finish_code': _('Task finish code'),
   'finish_code_help': _('Runs at "Finish" date via Scheduler'),
   'notification_delivered': _('Notification marked as delivered'),
+  'finish_before_start': _('Finish date cannot be earlier than start date'),
+  'save_failed': _('Failed to save task'),
   'cancel': _('Cancel'),
   'save': _('Save'),
   'list_name_placeholder': _('List title'),
@@ -444,6 +446,7 @@
             <div v-if="!taskFormIsNew && taskForm.settings.notified" class="alert alert-info py-2 small mb-0">
               {{ _('Notification marked as delivered') }}
             </div>
+            <div v-if="taskFormError" class="alert alert-danger py-2 small mb-0">[[ taskFormError ]]</div>
           </div>
         </div>
         <div class="modal-footer">
@@ -521,6 +524,7 @@
       expandedTaskId: null,
       taskFormIsNew: true,
       defaultFinishMinutes: 30,
+      taskFormError: '',
       taskModalTab: 'main',
       taskForm: {
         id: null,
@@ -1016,6 +1020,7 @@
       openTaskModalCreate(listIndex) {
         const list = this.lists[listIndex];
         if (!list) return;
+        this.taskFormError = '';
         this.taskFormIsNew = true;
         this.taskModalTab = 'main';
         this.taskForm = this.buildTaskForm({ list_id: list.id }, true);
@@ -1024,6 +1029,7 @@
       openTaskModalEdit(taskId) {
         const task = this.tasks.find(t => t.id === taskId);
         if (!task) return;
+        this.taskFormError = '';
         this.taskFormIsNew = false;
         this.taskModalTab = 'main';
         this.taskForm = this.buildTaskForm(task, false);
@@ -1071,6 +1077,7 @@
       async saveTaskModal() {
         const title = (this.taskForm.title || '').trim();
         if (!title) return;
+        this.taskFormError = '';
         const payload = {
           list_id: this.taskForm.list_id,
           title,
@@ -1091,20 +1098,37 @@
             : null,
           settings: { ...this.taskForm.settings },
         };
-        if (this.taskFormIsNew) {
-          const res = await axios.post('/api/Todo/task/0', payload);
-          if (!res.data.success) return;
-          this.tasks.push(this.normalizeTask(res.data.result));
-        } else {
-          payload.id = this.taskForm.id;
-          const res = await axios.post(`/api/Todo/task/${this.taskForm.id}`, payload);
-          if (!res.data.success) return;
-          const taskIndex = this.tasks.findIndex(t => t.id === this.taskForm.id);
-          if (taskIndex >= 0) {
-            this.$set(this.tasks, taskIndex, this.normalizeTask(res.data.result));
-          }
+        const started = this.parseDateTime(payload.started);
+        const finished = this.parseDateTime(payload.finished);
+        if (started && finished && finished < started) {
+          this.taskFormError = this.i18n.finish_before_start;
+          return;
         }
-        this.closeTaskModal();
+        try {
+          if (this.taskFormIsNew) {
+            const res = await axios.post('/api/Todo/task/0', payload);
+            if (!res.data.success) {
+              this.taskFormError = res.data.msg || this.i18n.save_failed;
+              return;
+            }
+            this.tasks.push(this.normalizeTask(res.data.result));
+          } else {
+            payload.id = this.taskForm.id;
+            const res = await axios.post(`/api/Todo/task/${this.taskForm.id}`, payload);
+            if (!res.data.success) {
+              this.taskFormError = res.data.msg || this.i18n.save_failed;
+              return;
+            }
+            const taskIndex = this.tasks.findIndex(t => t.id === this.taskForm.id);
+            if (taskIndex >= 0) {
+              this.$set(this.tasks, taskIndex, this.normalizeTask(res.data.result));
+            }
+          }
+          this.closeTaskModal();
+        } catch (err) {
+          const data = (err && err.response && err.response.data) || {};
+          this.taskFormError = data.msg || this.i18n.save_failed;
+        }
       },
       async markNotified(taskId) {
         const res = await axios.post(`/api/Todo/task/${taskId}/notified`);

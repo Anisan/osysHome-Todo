@@ -24,6 +24,8 @@
   'start': _('Start'),
   'finish': _('Finish'),
   'completed': _('Completed'),
+  'finish_before_start': _('Finish date cannot be earlier than start date'),
+  'save_failed': _('Failed to save task'),
   'close': _('Close'),
   'save': _('Save')
 } %}
@@ -234,6 +236,7 @@
             />
             <label class="form-check-label" for="calTaskCompleted">{{ _('Completed') }}</label>
           </div>
+          <div v-if="taskFormError" class="alert alert-danger py-2 small mb-0 mt-2">[[ taskFormError ]]</div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ _('Close') }}</button>
@@ -265,6 +268,7 @@
       hideCompleted: false,
       maxMonthTasks: 4,
       taskForm: null,
+      taskFormError: '',
       weekDayNames: ['{{ _('Mon') }}', '{{ _('Tue') }}', '{{ _('Wed') }}', '{{ _('Thu') }}', '{{ _('Fri') }}', '{{ _('Sat') }}', '{{ _('Sun') }}'],
       monthNames: [
         '{{ _('January') }}', '{{ _('February') }}', '{{ _('March') }}', '{{ _('April') }}', '{{ _('May') }}', '{{ _('June') }}',
@@ -562,6 +566,7 @@
       openTaskModalEdit(taskId) {
         const task = this.tasks.find(t => t.id === taskId);
         if (!task) return;
+        this.taskFormError = '';
         this.taskForm = this.buildTaskForm(task);
         const el = document.getElementById('calTaskModal');
         if (!this._taskModal) this._taskModal = new bootstrap.Modal(el);
@@ -575,6 +580,7 @@
         if (!this.taskForm || !this.taskFormCanEdit) return;
         const title = (this.taskForm.title || '').trim();
         if (!title) return;
+        this.taskFormError = '';
         const payload = {
           id: this.taskForm.id,
           list_id: this.taskForm.list_id,
@@ -589,11 +595,25 @@
             ? this.fromDateInput(this.taskForm._finishedDateInput || this.taskForm._startedDateInput)
             : this.fromDatetimeLocal(this.taskForm._finishedInput),
         };
-        const res = await axios.post(`/api/Todo/task/${this.taskForm.id}`, payload);
-        if (!res.data.success) return;
-        const idx = this.tasks.findIndex(t => t.id === this.taskForm.id);
-        if (idx >= 0) this.$set(this.tasks, idx, this.normalizeTask(res.data.result));
-        this.closeTaskModal();
+        const started = this.parseDateTime(payload.started);
+        const finished = this.parseDateTime(payload.finished);
+        if (started && finished && finished < started) {
+          this.taskFormError = this.i18n.finish_before_start;
+          return;
+        }
+        try {
+          const res = await axios.post(`/api/Todo/task/${this.taskForm.id}`, payload);
+          if (!res.data.success) {
+            this.taskFormError = res.data.msg || this.i18n.save_failed;
+            return;
+          }
+          const idx = this.tasks.findIndex(t => t.id === this.taskForm.id);
+          if (idx >= 0) this.$set(this.tasks, idx, this.normalizeTask(res.data.result));
+          this.closeTaskModal();
+        } catch (err) {
+          const data = (err && err.response && err.response.data) || {};
+          this.taskFormError = data.msg || this.i18n.save_failed;
+        }
       },
       async toggleCompleteFromModal() {
         if (!this.taskForm || !this.taskFormCanComplete) return;

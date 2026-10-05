@@ -270,6 +270,9 @@ def save_task(
     if entity_id is None:
         _ensure_timed_finished(task)
 
+    if task.started and task.finished and task.finished < task.started:
+        raise ValueError("finished must be greater than or equal to started")
+
     if not notification_service.has_scheduled_dates(task):
         task.finished = None
         task.settings = notification_service.serialize_task_settings({
