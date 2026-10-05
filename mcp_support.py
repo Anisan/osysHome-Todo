@@ -763,9 +763,27 @@ def mcp_validate_entity(collection: str, payload: dict, entity_id=None) -> dict:
             if row is None:
                 return {"ok": False, "errors": [{"field": "id", "message": f"task not found: {entity_id}"}]}
 
-    if collection == LISTS and entity_id not in (None, ""):
-        row = TodoList.query.get(int(entity_id))
-        if row is None:
-            return {"ok": False, "errors": [{"field": "id", "message": f"list not found: {entity_id}"}]}
+    if collection == LISTS:
+        if entity_id not in (None, ""):
+            row = TodoList.query.get(int(entity_id))
+            if row is None:
+                return {"ok": False, "errors": [{"field": "id", "message": f"list not found: {entity_id}"}]}
+        else:
+            title = str(payload.get("title") or "").strip()
+            if title:
+                duplicate = TodoList.query.filter(TodoList.title == title).one_or_none()
+                if duplicate is not None:
+                    warnings = list(result.get("warnings") or [])
+                    warnings.append({
+                        "field": "title",
+                        "message": (
+                            f"list title already exists: {title}; "
+                            f"upsert without entity_id will update id={duplicate.id}"
+                        ),
+                    })
+                    result = {**result, "warnings": warnings}
 
-    return {"ok": True, "errors": []}
+    response = {"ok": True, "errors": []}
+    if result.get("warnings"):
+        response["warnings"] = result["warnings"]
+    return response

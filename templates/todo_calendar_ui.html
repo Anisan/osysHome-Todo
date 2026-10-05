@@ -586,7 +586,7 @@
             ? this.fromDateInput(this.taskForm._startedDateInput)
             : this.fromDatetimeLocal(this.taskForm._startedInput),
           finished: this.taskForm.all_day
-            ? this.fromDateInput(this.taskForm._finishedDateInput)
+            ? this.fromDateInput(this.taskForm._finishedDateInput || this.taskForm._startedDateInput)
             : this.fromDatetimeLocal(this.taskForm._finishedInput),
         };
         const res = await axios.post(`/api/Todo/task/${this.taskForm.id}`, payload);
@@ -603,6 +603,8 @@
         const idx = this.tasks.findIndex(t => t.id === this.taskForm.id);
         if (idx >= 0) this.$set(this.tasks, idx, updated);
         this.taskForm.completed = !!updated.completed;
+        this.taskForm._finishedInput = this.toDatetimeLocal(updated.finished);
+        this.taskForm._finishedDateInput = this.toDateInput(updated.finished);
       },
     },
   });

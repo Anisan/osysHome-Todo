@@ -55,13 +55,20 @@ def save_list(payload: Dict[str, Any], entity_id: Optional[int] = None) -> TodoL
         task_permissions.assign_owner_if_missing(item, username)
         item.updated = get_now_to_utc()
     else:
-        item = TodoList()
-        item.created = get_now_to_utc()
-        item.updated = item.created
-        item.created_by = username
-        max_order = db.session.query(db.func.max(TodoList.sort_order)).scalar()
-        item.sort_order = (max_order or -1) + 1
-        db.session.add(item)
+        title = str(payload.get("title") or "").strip()
+        item = TodoList.query.filter(TodoList.title == title).one_or_none() if title else None
+        if item is None:
+            item = TodoList()
+            item.created = get_now_to_utc()
+            item.updated = item.created
+            item.created_by = username
+            max_order = db.session.query(db.func.max(TodoList.sort_order)).scalar()
+            item.sort_order = (max_order or -1) + 1
+            db.session.add(item)
+        else:
+            task_permissions.assert_can_edit_list(item, username)
+            task_permissions.assign_owner_if_missing(item, username)
+            item.updated = get_now_to_utc()
 
     item.title = payload.get("title")
     if "tags" in payload:

@@ -834,6 +834,9 @@
             this.taskForm._startedInput = this.nowDatetimeLocal();
             this.taskForm._startedDateInput = this.nowDateInput();
           }
+          if (this.taskForm.all_day && !this.taskForm._finishedDateInput) {
+            this.taskForm._finishedDateInput = this.taskForm._startedDateInput || this.nowDateInput();
+          }
         } else {
           this.taskForm._startedInput = '';
           this.taskForm._startedDateInput = '';
@@ -852,6 +855,9 @@
           this.taskForm._startedDateInput = this.toDateInput(source.replace('T', ' ')) || this.nowDateInput();
           if (this.taskForm._finishedInput) {
             this.taskForm._finishedDateInput = this.toDateInput(this.taskForm._finishedInput.replace('T', ' '));
+          }
+          if (!this.taskForm._finishedDateInput) {
+            this.taskForm._finishedDateInput = this.taskForm._startedDateInput;
           }
         } else {
           if (this.taskForm._startedDateInput) {
@@ -1067,7 +1073,7 @@
             : null,
           finished: this.taskForm.has_dates
             ? (this.taskForm.all_day
-              ? this.fromDateInput(this.taskForm._finishedDateInput)
+              ? this.fromDateInput(this.taskForm._finishedDateInput || this.taskForm._startedDateInput)
               : this.fromDatetimeLocal(this.taskForm._finishedInput))
             : null,
           settings: { ...this.taskForm.settings },

@@ -5,7 +5,15 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from app.database import db, get_now_to_utc, session_scope
+from zoneinfo import ZoneInfo
+
+from app.database import (
+    convert_local_to_utc,
+    convert_utc_to_local,
+    db,
+    get_now_to_utc,
+    session_scope,
+)
 from plugins.Todo.models.Task import TodoTask
 from plugins.Todo.services import notification_service
 from plugins.Todo.services import task_permissions
@@ -65,19 +73,19 @@ def migrate_deadline_to_finished() -> None:
             conn.commit()
 
 
-def _parse_datetime(value) -> Optional[datetime]:
+def _parse_raw_datetime(value):
+    """Return datetime as parsed (may be aware) or None."""
     if value in (None, "", False):
         return None
     if isinstance(value, datetime):
-        return value.replace(tzinfo=None) if value.tzinfo else value
+        return value
     text = str(value).strip()
     if not text:
         return None
     if text.endswith("Z"):
         text = text[:-1] + "+00:00"
     try:
-        parsed = datetime.fromisoformat(text)
-        return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+        return datetime.fromisoformat(text)
     except ValueError:
         return None
 
@@ -100,18 +108,54 @@ def _all_day_finish(dt: datetime) -> datetime:
     return dt.replace(hour=23, minute=59, second=59, microsecond=0)
 
 
-def _normalize_started(value, all_day: bool) -> Optional[datetime]:
-    parsed = _parse_datetime(value)
+def _coerce_to_utc(value, all_day: bool, boundary: str) -> Optional[datetime]:
+    """Store datetimes as UTC.
+
+    Naive strings from UI/API are local wall time.
+    Timezone-aware values are treated as absolute instants.
+    all_day boundaries are applied on the local calendar day.
+    """
+    parsed = _parse_raw_datetime(value)
     if parsed is None:
         return None
-    return _all_day_start(parsed) if all_day else parsed
+
+    if parsed.tzinfo is not None:
+        utc = parsed.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+        if not all_day:
+            return utc
+        local = convert_utc_to_local(utc)
+    else:
+        local = parsed
+
+    if all_day:
+        local = _all_day_start(local) if boundary == "start" else _all_day_finish(local)
+    return convert_local_to_utc(local)
+
+
+def _normalize_started(value, all_day: bool) -> Optional[datetime]:
+    return _coerce_to_utc(value, all_day, "start")
 
 
 def _normalize_finished(value, all_day: bool) -> Optional[datetime]:
-    parsed = _parse_datetime(value)
-    if parsed is None:
-        return None
-    return _all_day_finish(parsed) if all_day else parsed
+    return _coerce_to_utc(value, all_day, "finish")
+
+
+def _normalize_completed(value, all_day: bool) -> Optional[datetime]:
+    return _coerce_to_utc(value, all_day, "finish")
+
+
+def _ensure_all_day_finished(task: TodoTask) -> None:
+    """If all_day has started but no finished, set finished to end of started's local day."""
+    if not task.all_day or not task.started or task.finished:
+        return
+    started_local = convert_utc_to_local(task.started)
+    task.finished = convert_local_to_utc(_all_day_finish(started_local))
+
+
+def _all_day_end_utc_from_utc(dt_utc: datetime) -> datetime:
+    """End of the local calendar day that contains dt_utc, stored as UTC."""
+    local = convert_utc_to_local(dt_utc)
+    return convert_local_to_utc(_all_day_finish(local))
 
 
 def task_to_dict(task: TodoTask, username: Optional[str] = None) -> Dict[str, Any]:
@@ -197,11 +241,9 @@ def save_task(
     if "finished" in payload:
         task.finished = _normalize_finished(payload.get("finished"), bool(task.all_day))
     if "completed" in payload:
-        completed = _parse_datetime(payload.get("completed"))
-        task.completed = _all_day_finish(completed) if completed and task.all_day else completed
+        task.completed = _normalize_completed(payload.get("completed"), bool(task.all_day))
     elif "complited" in payload:
-        completed = _parse_datetime(payload.get("complited"))
-        task.completed = _all_day_finish(completed) if completed and task.all_day else completed
+        task.completed = _normalize_completed(payload.get("complited"), bool(task.all_day))
 
     if "assignee" in payload:
         assignee = payload.get("assignee")
@@ -211,6 +253,8 @@ def save_task(
 
     if "settings" in payload:
         task.settings = notification_service.serialize_task_settings(payload.get("settings") or {})
+
+    _ensure_all_day_finished(task)
 
     if not notification_service.has_scheduled_dates(task):
         task.finished = None
@@ -274,17 +318,25 @@ def toggle_task_complete(entity_id: int, username: Optional[str] = None) -> Todo
     task = get_task(entity_id, username)
     task_permissions.assert_can_complete(task, username)
     if task.completed:
+        completed_at = task.completed
         task.completed = None
-        task.finished = None
+        # Preserve planned finished; only clear/restore when it was synced to completed
+        if task.all_day and task.started:
+            if task.finished is None or task.finished == completed_at:
+                task.finished = _all_day_end_utc_from_utc(task.started)
+        elif task.finished == completed_at:
+            task.finished = None
     else:
         now = get_now_to_utc()
         if task.all_day:
-            end = _all_day_finish(now)
+            end = _all_day_end_utc_from_utc(now)
             task.completed = end
-            task.finished = end
+            if not task.finished:
+                task.finished = end
         else:
             task.completed = now
-            task.finished = now
+            if not task.finished:
+                task.finished = now
     task.updated = get_now_to_utc()
     db.session.commit()
     db.session.refresh(task)
