@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 from zoneinfo import ZoneInfo
@@ -17,6 +17,8 @@ from app.database import (
 from plugins.Todo.models.Task import TodoTask
 from plugins.Todo.services import notification_service
 from plugins.Todo.services import task_permissions
+
+DEFAULT_TIMED_FINISH_MINUTES = 30
 
 
 def migrate_deadline_to_finished() -> None:
@@ -152,6 +154,16 @@ def _ensure_all_day_finished(task: TodoTask) -> None:
     task.finished = convert_local_to_utc(_all_day_finish(started_local))
 
 
+def _ensure_timed_finished(task: TodoTask) -> None:
+    """If a timed task has a start but no finish, default to start + DEFAULT_TIMED_FINISH_MINUTES.
+
+    Applied on create only: on edit an empty finished is a deliberate way to keep a task open.
+    """
+    if task.all_day or not task.started or task.finished:
+        return
+    task.finished = task.started + timedelta(minutes=DEFAULT_TIMED_FINISH_MINUTES)
+
+
 def _all_day_end_utc_from_utc(dt_utc: datetime) -> datetime:
     """End of the local calendar day that contains dt_utc, stored as UTC."""
     local = convert_utc_to_local(dt_utc)
@@ -255,6 +267,8 @@ def save_task(
         task.settings = notification_service.serialize_task_settings(payload.get("settings") or {})
 
     _ensure_all_day_finished(task)
+    if entity_id is None:
+        _ensure_timed_finished(task)
 
     if not notification_service.has_scheduled_dates(task):
         task.finished = None
