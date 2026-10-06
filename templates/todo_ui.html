@@ -48,6 +48,8 @@
   'finish_code': _('Task finish code'),
   'finish_code_help': _('Runs at "Finish" date via Scheduler'),
   'notification_delivered': _('Notification marked as delivered'),
+  'finish_before_start': _('Finish date cannot be earlier than start date'),
+  'save_failed': _('Failed to save task'),
   'cancel': _('Cancel'),
   'save': _('Save'),
   'list_name_placeholder': _('List title'),
@@ -354,12 +356,14 @@
                 type="date"
                 class="form-control"
                 v-model="taskForm._startedDateInput"
+                @change="onStartedInputChange"
               />
               <input
                 v-else
                 type="datetime-local"
                 class="form-control"
                 v-model="taskForm._startedInput"
+                @change="onStartedInputChange"
               />
             </div>
             <div class="col-sm-6">
@@ -369,12 +373,14 @@
                 type="date"
                 class="form-control"
                 v-model="taskForm._finishedDateInput"
+                @change="onFinishedInputChange"
               />
               <input
                 v-else
                 type="datetime-local"
                 class="form-control"
                 v-model="taskForm._finishedInput"
+                @change="onFinishedInputChange"
               />
             </div>
             </template>
@@ -445,6 +451,7 @@
               {{ _('Notification marked as delivered') }}
             </div>
           </div>
+          <div v-if="taskFormError" class="alert alert-danger py-2 small mb-0 mt-3">[[ taskFormError ]]</div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ _('Cancel') }}</button>
@@ -520,6 +527,8 @@
       editingName: '',
       expandedTaskId: null,
       taskFormIsNew: true,
+      defaultFinishMinutes: 30,
+      taskFormError: '',
       taskModalTab: 'main',
       taskForm: {
         id: null,
@@ -533,6 +542,7 @@
         _startedDateInput: '',
         _finishedInput: '',
         _finishedDateInput: '',
+        _finishAuto: true,
         settings: {
           reminder_enabled: false,
           reminder_offset_minutes: 15,
@@ -814,6 +824,14 @@
         const pad = (n) => String(n).padStart(2, '0');
         return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       },
+      addMinutesToDatetimeLocal(value, minutes) {
+        if (!value) return '';
+        const base = new Date(value.length > 16 ? value.slice(0, 16) : value);
+        if (Number.isNaN(base.getTime())) return '';
+        base.setMinutes(base.getMinutes() + minutes);
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${base.getFullYear()}-${pad(base.getMonth() + 1)}-${pad(base.getDate())}T${pad(base.getHours())}:${pad(base.getMinutes())}`;
+      },
       fromDateInput(value) {
         if (!value) return null;
         return `${value} 00:00:00`;
@@ -834,14 +852,12 @@
             this.taskForm._startedInput = this.nowDatetimeLocal();
             this.taskForm._startedDateInput = this.nowDateInput();
           }
-          if (this.taskForm.all_day && !this.taskForm._finishedDateInput) {
-            this.taskForm._finishedDateInput = this.taskForm._startedDateInput || this.nowDateInput();
-          }
         } else {
           this.taskForm._startedInput = '';
           this.taskForm._startedDateInput = '';
           this.taskForm._finishedInput = '';
           this.taskForm._finishedDateInput = '';
+          this.taskForm._finishAuto = true;
           this.taskForm.settings.reminder_enabled = false;
           this.taskForm.settings.notified = false;
           if (this.taskModalTab === 'settings') {
@@ -849,15 +865,31 @@
           }
         }
       },
+      applyAutoFinish() {
+        if (!this.taskForm.has_dates || !this.taskForm._finishAuto) {
+          return;
+        }
+        if (this.taskForm.all_day) {
+          this.taskForm._finishedDateInput = this.taskForm._startedDateInput;
+        } else {
+          this.taskForm._finishedInput = this.addMinutesToDatetimeLocal(
+            this.taskForm._startedInput, this.defaultFinishMinutes);
+        }
+      },
+      onStartedInputChange() {
+        this.taskForm._finishAuto = true;
+        this.applyAutoFinish();
+      },
+      onFinishedInputChange() {
+        this.taskForm._finishAuto = false;
+      },
       onAllDayToggle() {
         if (this.taskForm.all_day) {
           const source = this.taskForm._startedInput || this.nowDatetimeLocal();
           this.taskForm._startedDateInput = this.toDateInput(source.replace('T', ' ')) || this.nowDateInput();
           if (this.taskForm._finishedInput) {
             this.taskForm._finishedDateInput = this.toDateInput(this.taskForm._finishedInput.replace('T', ' '));
-          }
-          if (!this.taskForm._finishedDateInput) {
-            this.taskForm._finishedDateInput = this.taskForm._startedDateInput;
+            this.taskForm._finishAuto = false;
           }
         } else {
           if (this.taskForm._startedDateInput) {
@@ -865,8 +897,10 @@
           }
           if (this.taskForm._finishedDateInput) {
             this.taskForm._finishedInput = `${this.taskForm._finishedDateInput}T23:59`;
+            this.taskForm._finishAuto = false;
           }
         }
+        this.applyAutoFinish();
       },
       buildTaskForm(task, isNew) {
         const started = task && !isNew ? task.started : null;
@@ -889,6 +923,7 @@
           _startedDateInput: hasDates ? this.toDateInput(started) : '',
           _finishedInput: hasDates ? this.toDatetimeLocal(finished) : '',
           _finishedDateInput: hasDates ? this.toDateInput(finished) : '',
+          _finishAuto: isNew,
           settings,
         };
       },
@@ -1003,6 +1038,7 @@
       openTaskModalCreate(listIndex) {
         const list = this.lists[listIndex];
         if (!list) return;
+        this.taskFormError = '';
         this.taskFormIsNew = true;
         this.taskModalTab = 'main';
         this.taskForm = this.buildTaskForm({ list_id: list.id }, true);
@@ -1011,6 +1047,7 @@
       openTaskModalEdit(taskId) {
         const task = this.tasks.find(t => t.id === taskId);
         if (!task) return;
+        this.taskFormError = '';
         this.taskFormIsNew = false;
         this.taskModalTab = 'main';
         this.taskForm = this.buildTaskForm(task, false);
@@ -1058,6 +1095,7 @@
       async saveTaskModal() {
         const title = (this.taskForm.title || '').trim();
         if (!title) return;
+        this.taskFormError = '';
         const payload = {
           list_id: this.taskForm.list_id,
           title,
@@ -1078,20 +1116,37 @@
             : null,
           settings: { ...this.taskForm.settings },
         };
-        if (this.taskFormIsNew) {
-          const res = await axios.post('/api/Todo/task/0', payload);
-          if (!res.data.success) return;
-          this.tasks.push(this.normalizeTask(res.data.result));
-        } else {
-          payload.id = this.taskForm.id;
-          const res = await axios.post(`/api/Todo/task/${this.taskForm.id}`, payload);
-          if (!res.data.success) return;
-          const taskIndex = this.tasks.findIndex(t => t.id === this.taskForm.id);
-          if (taskIndex >= 0) {
-            this.$set(this.tasks, taskIndex, this.normalizeTask(res.data.result));
-          }
+        const started = this.parseDateTime(payload.started);
+        const finished = this.parseDateTime(payload.finished);
+        if (started && finished && finished < started) {
+          this.taskFormError = this.i18n.finish_before_start;
+          return;
         }
-        this.closeTaskModal();
+        try {
+          if (this.taskFormIsNew) {
+            const res = await axios.post('/api/Todo/task/0', payload);
+            if (!res.data.success) {
+              this.taskFormError = res.data.msg || this.i18n.save_failed;
+              return;
+            }
+            this.tasks.push(this.normalizeTask(res.data.result));
+          } else {
+            payload.id = this.taskForm.id;
+            const res = await axios.post(`/api/Todo/task/${this.taskForm.id}`, payload);
+            if (!res.data.success) {
+              this.taskFormError = res.data.msg || this.i18n.save_failed;
+              return;
+            }
+            const taskIndex = this.tasks.findIndex(t => t.id === this.taskForm.id);
+            if (taskIndex >= 0) {
+              this.$set(this.tasks, taskIndex, this.normalizeTask(res.data.result));
+            }
+          }
+          this.closeTaskModal();
+        } catch (err) {
+          const data = (err && err.response && err.response.data) || {};
+          this.taskFormError = data.msg || this.i18n.save_failed;
+        }
       },
       async markNotified(taskId) {
         const res = await axios.post(`/api/Todo/task/${taskId}/notified`);
