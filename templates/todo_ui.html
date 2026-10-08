@@ -47,6 +47,9 @@
   'start_code_help': _('Runs at "Start" date via Scheduler'),
   'finish_code': _('Task finish code'),
   'finish_code_help': _('Runs at "Finish" date via Scheduler'),
+  'recurrence_cron': _('Recurrence cron'),
+  'recurrence_cron_empty': _('Empty - no recurrence'),
+  'recurrence_cron_help': _('Cron format: m h dom mon dow. On complete a new task copy is created for the next slot.'),
   'notification_delivered': _('Notification marked as delivered'),
   'finish_before_start': _('Finish date cannot be earlier than start date'),
   'save_failed': _('Failed to save task'),
@@ -383,6 +386,17 @@
                 @change="onFinishedInputChange"
               />
             </div>
+            <div class="col-12">
+              <label class="form-label small mb-0">{{ _('Recurrence cron') }}</label>
+              <input
+                type="text"
+                class="form-control font-monospace"
+                v-model="taskForm.settings.recurrence_cron"
+                placeholder="{{ _('Empty - no recurrence') }}"
+                :disabled="!taskFormCanEdit"
+              />
+              <div class="form-text">{{ _('Cron format: m h dom mon dow. On complete a new task copy is created for the next slot.') }}</div>
+            </div>
             </template>
           </div>
           <div class="row g-2 mt-1">
@@ -550,6 +564,7 @@
           start_code: '',
           finish_code: '',
           notified: false,
+          recurrence_cron: '',
         },
       },
       sortKey: 'title',
@@ -789,6 +804,7 @@
           start_code: '',
           finish_code: '',
           notified: false,
+          recurrence_cron: '',
         };
         if (!settings || typeof settings !== 'object') {
           return { ...defaults };
@@ -799,6 +815,7 @@
           reminder_enabled: !!settings.reminder_enabled,
           reminder_offset_minutes: Number(settings.reminder_offset_minutes ?? 15),
           notified: !!settings.notified,
+          recurrence_cron: settings.recurrence_cron ? String(settings.recurrence_cron) : '',
         };
       },
       parseDateTime(value) {

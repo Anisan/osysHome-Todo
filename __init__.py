@@ -24,7 +24,7 @@ class Todo(BasePlugin):
         self.system = True
         self.actions = ['search','widget','page']
         self.category = "App"
-        self.version = "0.4"
+        self.version = "0.5"
         
         from plugins.Todo.api import create_api_ns
         api_ns = create_api_ns()
@@ -41,9 +41,10 @@ class Todo(BasePlugin):
 
     def run_task_event(self, task_id, event):
         from plugins.Todo.services import notification_service
-        return notification_service.run_task_event(
-            int(task_id), str(event), plugin_config=self.config
-        )
+        with self._app.app_context():
+            return notification_service.run_task_event(
+                int(task_id), str(event), plugin_config=self.config
+            )
 
     def get_notification_settings(self):
         from plugins.Todo.services.notification_service import normalize_plugin_settings

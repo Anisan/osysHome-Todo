@@ -54,7 +54,10 @@ Capabilities доступны через:
 - `reminder_code` (string);
 - `start_code` (string);
 - `finish_code` (string);
-- `notified` (bool).
+- `notified` (bool);
+- `recurrence_cron` (string) — выражение cron для повтора; пустая строка = без повтора.
+
+Формат `recurrence_cron`: стандартное cron `m h dom mon dow` (как в Scheduler). При сохранении задачи строка проверяется через `validate_cron_expression`.
 
 ### 3.4. `hooks` (виртуальная схема)
 
@@ -62,7 +65,7 @@ Capabilities доступны через:
 
 - `code` (required);
 - `task_id`;
-- `event`: `reminder`, `start`, `finish`, `create`, `delete`, `notified`;
+- `event`: `reminder`, `start`, `finish`, `create`, `delete`, `notified`, `completed`;
 - `task` (override snapshot для dry-run).
 
 ## 4. Конфигурация плагина
@@ -76,7 +79,8 @@ Capabilities доступны через:
 - `default_finish_code`;
 - `code_on_create`;
 - `code_on_delete`;
-- `code_on_notified`.
+- `code_on_notified`;
+- `code_on_completed`.
 
 ## 5. Операции `invoke`
 
@@ -123,10 +127,32 @@ Capabilities доступны через:
 
 `complete_task` синхронно выставляет или очищает `completed` и `finished`.
 
+При **отметке выполненной** (переход в completed):
+
+1. Снимаются Scheduler-задачи плагина для этой записи (`Todo.task.<id>.*`).
+2. Выполняется instant-хук `completed` (код `code_on_completed` в конфиге плагина).
+3. Если в `settings.recurrence_cron` задано непустое выражение и у задачи есть `started`:
+   - текущая запись остаётся с заполненным `completed`;
+   - создаётся **новая** задача-копия (тот же список, текст, приоритет, доступ, `settings` с `notified=false`);
+   - `started` / `finished` копии — следующий слот cron (от «сейчас» в часовом поясе сервера, как Scheduler) плюс прежняя длительность `finished - started` (если `finished` был задан до complete; иначе — правила all_day / +30 мин для timed);
+   - для копии вызываются `sync_task_schedules` и хук `create` (если есть даты).
+
+При снятии отметки выполнения повторная копия **не** создаётся.
+
 Если `started` отсутствует, задача трактуется как заметка:
 
 - не получает scheduler-задачи;
 - scheduled-hooks не запускаются (если не принудить через `force=true` для ручного вызова события).
+
+У задач с заполненным `completed` Scheduler-джобы reminder/start/finish **не** создаются.
+
+## 7.1. Scheduler и напоминания
+
+Имена одноразовых задач Scheduler: `Todo.task.<task_id>.<event>`, где `event` — `reminder`, `start` или `finish`.
+
+Код джоба вызывает `callPluginFunction("Todo", "run_task_event", ...)`. Метод плагина `run_task_event` выполняется внутри Flask `app_context`, чтобы ORM и БД работали из потока Scheduler.
+
+Приоритет кода хука: поле в `tasks.settings` → значение по умолчанию в конфиге плагина → событие пропускается, если код пустой.
 
 ## 8. Примеры MCP запросов
 
@@ -167,6 +193,29 @@ Capabilities доступны через:
   }
 }
 ```
+
+### 8.2.1. Повторяющаяся задача (cron)
+
+```json
+{
+  "plugin": "Todo",
+  "action": "upsert_entity",
+  "args": {
+    "collection": "tasks",
+    "payload": {
+      "list_id": 1,
+      "title": "Еженедельный обзор",
+      "started": "2026-07-07 09:00:00",
+      "finished": "2026-07-07 10:00:00",
+      "settings": {
+        "recurrence_cron": "0 9 * * 1"
+      }
+    }
+  }
+}
+```
+
+После `complete_task` для такой задачи появится новая запись со следующим понедельником в 09:00 (следующий слот cron от момента завершения).
 
 ### 8.3. Получить задачи списка
 

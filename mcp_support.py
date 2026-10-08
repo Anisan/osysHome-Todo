@@ -24,7 +24,7 @@ HOOKS = "hooks"
 
 _DATETIME_DESC = "ISO 8601 or 'YYYY-MM-DD HH:MM:SS' (naive datetime)"
 
-_TASK_EVENTS = ("reminder", "start", "finish", "create", "delete", "notified")
+_TASK_EVENTS = ("reminder", "start", "finish", "create", "delete", "notified", "completed")
 
 _PRIORITY_LEVELS = {
     0: "low",
@@ -82,6 +82,12 @@ def _notification_settings_properties() -> dict:
             "x-code-language": "python",
             "x-code-context": code_ctx,
         },
+        "code_on_completed": {
+            "type": "string",
+            "description": "Python code run immediately when a task is marked completed",
+            "x-code-language": "python",
+            "x-code-context": code_ctx,
+        },
     }
 
 
@@ -119,7 +125,7 @@ def _task_event_schema() -> dict:
         "enum": list(_TASK_EVENTS),
         "description": (
             "Hook event: reminder (before started), start, finish (scheduled), "
-            "create, delete, notified (immediate)"
+            "create, delete, notified, completed (immediate)"
         ),
     }
 
@@ -221,7 +227,7 @@ def mcp_capabilities() -> dict:
                 },
             },
             "run_task_event": {
-                "description": "Run resolved hook code for a task event (reminder/start/finish/create/delete/notified)",
+                "description": "Run resolved hook code for a task event (reminder/start/finish/create/delete/notified/completed)",
                 "params": {
                     "type": "object",
                     "properties": {
@@ -273,8 +279,9 @@ def mcp_capabilities() -> dict:
             "all_day=true stores dates at day start (started) and day end 23:59:59 (finished/completed).",
             "Without started the task is a plain note: no Scheduler jobs and no hooks (unless force=true).",
             "complete_task sets finished and completed, or clears both.",
-            "Task settings.settings: reminder_enabled, reminder_offset_minutes, reminder/start/finish_code, notified.",
-            "Plugin config: default_reminder/start/finish_code, code_on_create/delete/notified.",
+            "Task settings.settings: reminder_enabled, reminder_offset_minutes, reminder/start/finish_code, notified, recurrence_cron.",
+            "Plugin config: default_reminder/start/finish_code, code_on_create/delete/notified/completed.",
+            "On complete with recurrence_cron: current task stays completed; a new copy is created for the next cron slot.",
             "Hook code runtime vars: task (dict with title, notes, ...), task_id, event, params, logger.",
             "Use collection hooks + validate_entity_code / run_entity_dry to test hook Python (context: task_id, event).",
             "MCP has full access to all lists and tasks (no per-user ACL).",
@@ -460,6 +467,13 @@ def mcp_entity_schema(collection: str) -> dict:
                             "default": False,
                             "description": "Whether notification was acknowledged",
                         },
+                        "recurrence_cron": {
+                            "type": "string",
+                            "description": (
+                                "Cron expression for recurrence; on complete a new task copy "
+                                "is created for the next fire (empty = no recurrence)"
+                            ),
+                        },
                     },
                 },
             },
@@ -622,7 +636,7 @@ def _resolve_hook_source(event: str, task_settings: dict, plugin_settings: dict)
         if (plugin_settings.get(default_key) or "").strip():
             return "plugin"
         return "none"
-    key = f"code_on_{event}" if event in ("create", "delete", "notified") else ""
+    key = f"code_on_{event}" if event in ("create", "delete", "notified", "completed") else ""
     if key and (plugin_settings.get(key) or "").strip():
         return "plugin"
     return "none"

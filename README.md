@@ -14,6 +14,9 @@ The `Todo` module provides a task management system for the osysHome platform. I
 - ✅ **Task Organization**: Organize tasks by categories
 - ✅ **Priority Management**: Set task priorities
 - ✅ **Status Tracking**: Track task completion status
+- ✅ **Reminders & scheduling**: Scheduler integration (reminder, start, finish hooks)
+- ✅ **Recurring tasks**: Cron in task settings; completing spawns the next occurrence
+- ✅ **Event hooks**: Python code on create, delete, complete, notify, etc.
 - ✅ **Search Integration**: Search tasks by title or notes
 - ✅ **Widget Support**: Dashboard widget with task statistics
 - ✅ **Page Support**: Standalone task management page
@@ -41,15 +44,20 @@ The module provides RESTful API endpoints:
 4. Set priority and status
 5. Save task
 
+## Documentation
+
+See [docs/index.ru.md](docs/index.ru.md) (Russian): user guide and MCP technical reference.
+
 ## Technical Details
 
 - **Database**: SQLAlchemy models
 - **API**: RESTful API endpoints
 - **Search**: Full-text search support
+- **MCP**: collections `lists`, `tasks`, `hooks`
 
 ## Version
 
-Current version: **0.1**
+Current version: **0.5**
 
 ## Category
 

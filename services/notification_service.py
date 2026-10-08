@@ -23,6 +23,7 @@ DEFAULT_TASK_SETTINGS: Dict[str, Any] = {
     "start_code": "",
     "finish_code": "",
     "notified": False,
+    "recurrence_cron": "",
 }
 
 DEFAULT_PLUGIN_SETTINGS: Dict[str, Any] = {
@@ -32,6 +33,7 @@ DEFAULT_PLUGIN_SETTINGS: Dict[str, Any] = {
     "code_on_create": "",
     "code_on_delete": "",
     "code_on_notified": "",
+    "code_on_completed": "",
 }
 
 
@@ -68,6 +70,8 @@ def parse_task_settings(raw) -> Dict[str, Any]:
                 data[key] = max(0, int(value))
             except (TypeError, ValueError):
                 data[key] = DEFAULT_TASK_SETTINGS["reminder_offset_minutes"]
+        elif key == "recurrence_cron":
+            data[key] = "" if value is None else str(value).strip()
         else:
             data[key] = "" if value is None else str(value)
     return data
@@ -186,6 +190,8 @@ def _resolve_code(event: str, task_settings: dict, plugin_settings: dict) -> str
         return (plugin_settings.get("code_on_delete") or "").strip()
     if event == "notified":
         return (plugin_settings.get("code_on_notified") or "").strip()
+    if event == "completed":
+        return (plugin_settings.get("code_on_completed") or "").strip()
     return ""
 
 
@@ -224,6 +230,8 @@ def sync_task_schedules(task: TodoTask, plugin_config: Optional[dict] = None) ->
     if task.id is None:
         return
     clear_task_schedules(task.id)
+    if getattr(task, "completed", None) is not None:
+        return
     if not has_scheduled_dates(task):
         return
     settings = parse_task_settings(getattr(task, "settings", None))

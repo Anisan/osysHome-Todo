@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional
 
 from zoneinfo import ZoneInfo
 
+from app.core.lib.crontab import nextStartCronJob, validate_cron_expression
 from app.database import (
     convert_local_to_utc,
     convert_utc_to_local,
@@ -14,11 +15,13 @@ from app.database import (
     get_now_to_utc,
     session_scope,
 )
+from app.logging_config import getLogger
 from plugins.Todo.models.Task import TodoTask
 from plugins.Todo.services import notification_service
 from plugins.Todo.services import task_permissions
 
 DEFAULT_TIMED_FINISH_MINUTES = 30
+_logger = getLogger("Todo")
 
 
 def migrate_deadline_to_finished() -> None:
@@ -264,7 +267,16 @@ def save_task(
         task.viewers = task_permissions.serialize_viewers(payload.get("viewers"))
 
     if "settings" in payload:
-        task.settings = notification_service.serialize_task_settings(payload.get("settings") or {})
+        parsed_settings = notification_service.parse_task_settings(payload.get("settings") or {})
+        cron = (parsed_settings.get("recurrence_cron") or "").strip()
+        if cron:
+            validation = validate_cron_expression(cron)
+            if not validation.get("ok"):
+                messages = "; ".join(
+                    err.get("message", str(err)) for err in (validation.get("errors") or [])
+                )
+                raise ValueError(f"Invalid recurrence_cron: {messages or cron}")
+        task.settings = notification_service.serialize_task_settings(parsed_settings)
 
     _ensure_all_day_finished(task)
     if entity_id is None:
@@ -331,9 +343,83 @@ def resync_all_schedules(plugin_config: Optional[dict] = None) -> int:
             count += 1
     return count
 
+def _clone_recurring_task(
+    source: TodoTask,
+    plugin_config: dict,
+    planned_started: Optional[datetime] = None,
+    planned_finished: Optional[datetime] = None,
+) -> Optional[TodoTask]:
+    """Create next occurrence of a recurring task; returns the clone or None."""
+    settings = notification_service.parse_task_settings(getattr(source, "settings", None))
+    cron = (settings.get("recurrence_cron") or "").strip()
+    base_started = planned_started if planned_started is not None else source.started
+    base_finished = planned_finished if planned_finished is not None else source.finished
+    if not cron or not base_started:
+        return None
+
+    validation = validate_cron_expression(cron)
+    if not validation.get("ok"):
+        _logger.error(
+            "Todo task %s: invalid recurrence_cron %r: %s",
+            source.id,
+            cron,
+            validation.get("errors"),
+        )
+        return None
+
+    try:
+        next_started_local = nextStartCronJob(cron)
+    except Exception as ex:
+        _logger.exception("Todo task %s: failed to compute next recurrence: %s", source.id, ex)
+        return None
+
+    next_started_utc = convert_local_to_utc(next_started_local)
+    if source.all_day:
+        next_started_utc = convert_local_to_utc(_all_day_start(next_started_local))
+        next_finished_utc = convert_local_to_utc(_all_day_finish(next_started_local))
+    elif base_finished and base_finished >= base_started:
+        duration = base_finished - base_started
+        next_finished_utc = next_started_utc + duration
+    else:
+        next_finished_utc = next_started_utc + timedelta(minutes=DEFAULT_TIMED_FINISH_MINUTES)
+
+    clone_settings = dict(settings)
+    clone_settings["notified"] = False
+
+    now = get_now_to_utc()
+    clone = TodoTask()
+    clone.list_id = source.list_id
+    clone.title = source.title
+    clone.notes = source.notes
+    clone.tags = source.tags
+    clone.priority = source.priority
+    clone.all_day = bool(source.all_day)
+    clone.created_by = source.created_by
+    clone.assignee = source.assignee
+    clone.viewers = source.viewers
+    clone.started = next_started_utc
+    clone.finished = next_finished_utc
+    clone.completed = None
+    clone.created = now
+    clone.updated = now
+    clone.settings = notification_service.serialize_task_settings(clone_settings)
+    db.session.add(clone)
+    db.session.commit()
+    db.session.refresh(clone)
+
+    notification_service.sync_task_schedules(clone, plugin_config)
+    if notification_service.has_scheduled_dates(clone):
+        notification_service.run_immediate_event(clone, "create", plugin_config=plugin_config)
+    return clone
+
+
 def toggle_task_complete(entity_id: int, username: Optional[str] = None) -> TodoTask:
     task = get_task(entity_id, username)
     task_permissions.assert_can_complete(task, username)
+    becoming_completed = not task.completed
+    # Capture planned window before complete may fill finished=now
+    recurrence_started = task.started
+    recurrence_finished = task.finished
     if task.completed:
         completed_at = task.completed
         task.completed = None
@@ -357,5 +443,17 @@ def toggle_task_complete(entity_id: int, username: Optional[str] = None) -> Todo
     task.updated = get_now_to_utc()
     db.session.commit()
     db.session.refresh(task)
-    notification_service.sync_task_schedules(task, _plugin_config())
+
+    plugin_config = _plugin_config()
+    notification_service.sync_task_schedules(task, plugin_config)
+
+    if becoming_completed:
+        notification_service.run_immediate_event(task, "completed", plugin_config=plugin_config)
+        _clone_recurring_task(
+            task,
+            plugin_config,
+            planned_started=recurrence_started,
+            planned_finished=recurrence_finished,
+        )
+
     return task

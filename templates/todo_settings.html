@@ -75,10 +75,16 @@
           {% set code_on_delete = {'name': 'code_on_delete', 'data': settings.get('code_on_delete', '')} %}
           {{ render_editor(code_on_delete, 'python', module_name='Todo') }}
         </div>
-        <div class="mb-0">
+        <div class="mb-3">
           <label class="form-label">{{ _('Code on "notified" mark') }}</label>
           {% set code_on_notified = {'name': 'code_on_notified', 'data': settings.get('code_on_notified', '')} %}
           {{ render_editor(code_on_notified, 'python', module_name='Todo') }}
+        </div>
+        <div class="mb-0">
+          <label class="form-label">{{ _('Code on completed') }}</label>
+          {% set code_on_completed = {'name': 'code_on_completed', 'data': settings.get('code_on_completed', '')} %}
+          {{ render_editor(code_on_completed, 'python', module_name='Todo') }}
+          <div class="form-text">{{ _('Runs when a task is marked completed. Recurring tasks then create a new copy for the next cron slot.') }}</div>
         </div>
       </div>
     </div>
@@ -96,6 +102,7 @@
   <textarea name="code_on_create" class="d-none">{{ settings.get('code_on_create', '') }}</textarea>
   <textarea name="code_on_delete" class="d-none">{{ settings.get('code_on_delete', '') }}</textarea>
   <textarea name="code_on_notified" class="d-none">{{ settings.get('code_on_notified', '') }}</textarea>
+  <textarea name="code_on_completed" class="d-none">{{ settings.get('code_on_completed', '') }}</textarea>
   {% endif %}
 
   <button type="submit" class="btn btn-primary">
