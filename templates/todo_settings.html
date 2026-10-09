@@ -55,7 +55,7 @@
           <label class="form-label">{{ _('Task finish code') }}</label>
           {% set default_finish_code = {'name': 'default_finish_code', 'data': settings.get('default_finish_code', '')} %}
           {{ render_editor(default_finish_code, 'python', module_name='Todo') }}
-          <div class="form-text">{{ _('Used when a task does not define custom finish code.') }}</div>
+          <div class="form-text">{{ _('Used when a task does not define custom finish code. Runs at planned Finish time; does not mark completed (see task setting Auto-complete at Finish time).') }}</div>
         </div>
       </div>
     </div>

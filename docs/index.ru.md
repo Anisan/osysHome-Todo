@@ -12,5 +12,6 @@
 ## Темы в руководствах
 
 - Напоминания и Scheduler — USER_GUIDE §5, TECHNICAL_REFERENCE §7.1
+- Автозавершение по `finished` (`auto_complete`) — USER_GUIDE §5, TECHNICAL_REFERENCE §7
 - Повтор по cron и копия при завершении — USER_GUIDE §5.1, TECHNICAL_REFERENCE §7
 - Событие `completed` и `code_on_completed` — USER_GUIDE §5.2, TECHNICAL_REFERENCE §3.3–3.4

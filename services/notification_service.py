@@ -22,6 +22,7 @@ DEFAULT_TASK_SETTINGS: Dict[str, Any] = {
     "reminder_code": "",
     "start_code": "",
     "finish_code": "",
+    "auto_complete": False,
     "notified": False,
     "recurrence_cron": "",
 }
@@ -63,7 +64,7 @@ def parse_task_settings(raw) -> Dict[str, Any]:
         if key not in source:
             continue
         value = source[key]
-        if key == "reminder_enabled" or key == "notified":
+        if key in ("reminder_enabled", "notified", "auto_complete"):
             data[key] = bool(value)
         elif key == "reminder_offset_minutes":
             try:
@@ -209,16 +210,18 @@ def _reminder_datetime(task: TodoTask, settings: dict) -> Optional[datetime]:
     return started_local - timedelta(minutes=offset)
 
 
-def _schedule_at(task_id: int, event: str, dt: Optional[datetime]) -> None:
+def _schedule_at(task_id: int, event: str, dt: Optional[datetime]) -> bool:
+    """Schedule a one-shot job. Returns True if scheduled, False if skipped/cleared (past or empty)."""
     name = _job_name(task_id, event)
     if dt is None:
         clearScheduledJob(name)
-        return
+        return False
     now_local = convert_utc_to_local(get_now_to_utc())
     if dt <= now_local:
         clearScheduledJob(name)
-        return
+        return False
     addScheduledJob(name, _scheduler_code(task_id, event), dt)
+    return True
 
 
 def clear_task_schedules(task_id: int) -> None:
@@ -244,8 +247,20 @@ def sync_task_schedules(task: TodoTask, plugin_config: Optional[dict] = None) ->
     if _resolve_code("start", settings, plugin_settings):
         _schedule_at(task.id, "start", convert_utc_to_local(task.started))
 
-    if task.finished and _resolve_code("finish", settings, plugin_settings):
-        _schedule_at(task.id, "finish", convert_utc_to_local(task.finished))
+    # finish job: hook code and/or optional auto-complete at planned finished time
+    if task.finished and (
+        _resolve_code("finish", settings, plugin_settings) or settings.get("auto_complete")
+    ):
+        finish_local = convert_utc_to_local(task.finished)
+        scheduled = _schedule_at(task.id, "finish", finish_local)
+        # If finish is already due and auto_complete is on, complete now (no future job).
+        if not scheduled and settings.get("auto_complete"):
+            run_task_event(
+                int(task.id),
+                "finish",
+                plugin_config=plugin_config,
+                task_snapshot=attach_settings(task),
+            )
 
 
 def run_task_event(
@@ -255,7 +270,9 @@ def run_task_event(
     task_snapshot: Optional[dict] = None,
     force: bool = False,
 ) -> dict:
-    """Execute hook code for a task event."""
+    """Execute hook code for a task event; optionally auto-complete on finish."""
+    from flask import g
+
     task = TodoTask.query.get(task_id)
     settings = parse_task_settings(getattr(task, "settings", None) if task else None)
     plugin_settings = normalize_plugin_settings(plugin_config)
@@ -269,17 +286,50 @@ def run_task_event(
         return {"ok": True, "skipped": True, "event": event, "task_id": task_id, "reason": "note"}
 
     code = _resolve_code(event, settings, plugin_settings)
-    if not code:
+    want_auto_complete = (
+        event == "finish"
+        and bool(settings.get("auto_complete"))
+        and task is not None
+        and getattr(task, "completed", None) is None
+    )
+
+    if not code and not want_auto_complete:
         return {"ok": True, "skipped": True, "event": event, "task_id": task_id}
 
-    output, success = _execute_task_code(code, task_snapshot, task_id, event)
-    return {
+    output = None
+    success = True
+    if code:
+        output, success = _execute_task_code(code, task_snapshot, task_id, event)
+
+    result = {
         "ok": bool(success),
         "skipped": False,
         "event": event,
         "task_id": task_id,
         "output": output,
+        "auto_completed": False,
     }
+
+    if want_auto_complete:
+        # Scheduler has no HTTP user; elevate like MCP for ACL on complete + recurrence clone
+        prev = getattr(g, "_todo_system_unrestricted", None)
+        g._todo_system_unrestricted = True
+        try:
+            from plugins.Todo.services import task_service
+
+            task_service.toggle_task_complete(int(task_id))
+            result["auto_completed"] = True
+        except Exception as ex:
+            _logger.exception("Todo task %s: auto_complete at finish failed: %s", task_id, ex)
+            result["ok"] = False
+            result["auto_complete_error"] = str(ex)
+        finally:
+            if prev is None:
+                g.pop("_todo_system_unrestricted", None)
+            else:
+                g._todo_system_unrestricted = prev
+
+    return result
 
 
 def run_immediate_event(task: TodoTask, event: str, plugin_config: Optional[dict] = None) -> dict:

@@ -23,6 +23,11 @@ def mcp_unrestricted() -> bool:
     return bool(getattr(g, "_todo_mcp_unrestricted", False))
 
 
+def system_unrestricted() -> bool:
+    """Scheduler / internal automation (e.g. auto-complete at finish)."""
+    return bool(getattr(g, "_todo_system_unrestricted", False))
+
+
 def current_username() -> Optional[str]:
     user = getattr(g, "current_user", None)
     if user and getattr(user, "username", None):
@@ -45,7 +50,7 @@ def _role_for_username(username: Optional[str]) -> Optional[str]:
 
 
 def is_admin() -> bool:
-    if mcp_unrestricted():
+    if mcp_unrestricted() or system_unrestricted():
         return True
     user = getattr(g, "current_user", None)
     if user and getattr(user, "role", None) == "admin":
@@ -122,7 +127,7 @@ def can_view_task(task: TodoTask, username: Optional[str] = None) -> bool:
 
 
 def task_permissions(task: TodoTask, username: Optional[str] = None) -> Dict[str, Any]:
-    if mcp_unrestricted():
+    if mcp_unrestricted() or system_unrestricted():
         return {
             "role": "admin",
             "can_view": True,

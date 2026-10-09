@@ -60,7 +60,10 @@ def _notification_settings_properties() -> dict:
         },
         "default_finish_code": {
             "type": "string",
-            "description": "Default Python code when task finishes (scheduled at finished)",
+            "description": (
+                "Default Python code at planned finished time (does not mark completed; "
+                "see task settings.auto_complete)"
+            ),
             "x-code-language": "python",
             "x-code-context": code_ctx,
         },
@@ -279,9 +282,10 @@ def mcp_capabilities() -> dict:
             "all_day=true stores dates at day start (started) and day end 23:59:59 (finished/completed).",
             "Without started the task is a plain note: no Scheduler jobs and no hooks (unless force=true).",
             "complete_task sets finished and completed, or clears both.",
-            "Task settings.settings: reminder_enabled, reminder_offset_minutes, reminder/start/finish_code, notified, recurrence_cron.",
+            "Task settings.settings: reminder_enabled, reminder_offset_minutes, reminder/start/finish_code, auto_complete, notified, recurrence_cron.",
+            "finish event runs finish_code (or default); auto_complete=true also marks the task completed at planned finished.",
             "Plugin config: default_reminder/start/finish_code, code_on_create/delete/notified/completed.",
-            "On complete with recurrence_cron: current task stays completed; a new copy is created for the next cron slot.",
+            "On complete (manual or auto_complete) with recurrence_cron: current task stays completed; a new copy is created for the next cron slot.",
             "Hook code runtime vars: task (dict with title, notes, ...), task_id, event, params, logger.",
             "Use collection hooks + validate_entity_code / run_entity_dry to test hook Python (context: task_id, event).",
             "MCP has full access to all lists and tasks (no per-user ACL).",
@@ -460,7 +464,18 @@ def mcp_entity_schema(collection: str) -> dict:
                         },
                         "finish_code": {
                             "type": "string",
-                            "description": "Python code at finished; empty uses plugin default_finish_code",
+                            "description": (
+                                "Python code at planned finished time; empty uses plugin "
+                                "default_finish_code. Does not mark completed."
+                            ),
+                        },
+                        "auto_complete": {
+                            "type": "boolean",
+                            "default": False,
+                            "description": (
+                                "If true, at planned finished the task is marked completed "
+                                "(Scheduler finish job); recurrence and code_on_completed apply"
+                            ),
                         },
                         "notified": {
                             "type": "boolean",
@@ -470,8 +485,9 @@ def mcp_entity_schema(collection: str) -> dict:
                         "recurrence_cron": {
                             "type": "string",
                             "description": (
-                                "Cron expression for recurrence; on complete a new task copy "
-                                "is created for the next fire (empty = no recurrence)"
+                                "Cron expression for recurrence; on complete (manual or "
+                                "auto_complete) a new task copy is created for the next fire "
+                                "(empty = no recurrence)"
                             ),
                         },
                     },

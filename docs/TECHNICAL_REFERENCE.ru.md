@@ -53,7 +53,8 @@ Capabilities доступны через:
 - `reminder_offset_minutes` (int, default `15`);
 - `reminder_code` (string);
 - `start_code` (string);
-- `finish_code` (string);
+- `finish_code` (string) — код в плановое время `finished` (не ставит `completed`);
+- `auto_complete` (bool, default `false`) — в плановое `finished` дополнительно отметить задачу выполненной;
 - `notified` (bool);
 - `recurrence_cron` (string) — выражение cron для повтора; пустая строка = без повтора.
 
@@ -121,13 +122,15 @@ Capabilities доступны через:
 
 ## 7. Семантика дат и статусов
 
-- `started` — время начала задачи;
-- `finished` — время окончания;
-- `completed` — время фактического завершения.
+- `started` — время начала работы (план);
+- `finished` — плановое время окончания (может быть задано заранее);
+- `completed` — время фактической отметки «выполнено».
 
-`complete_task` синхронно выставляет или очищает `completed` и `finished`.
+`complete_task` выставляет `completed` (и `finished`, только если `finished` ещё пуст). При снятии отметки очищает `completed`; `finished` очищается только если он совпадал с прежним `completed` (плановое окончание сохраняется).
 
-При **отметке выполненной** (переход в completed):
+Событие Scheduler `finish` выполняет `finish_code` / `default_finish_code`. Если `auto_complete=true`, после этого вызывается тот же путь, что и `complete_task` (хук `completed`, повтор по cron). Джоб `finish` ставится при наличии кода finish **или** `auto_complete`. Если `finished` уже наступил и `auto_complete=true`, при `sync_task_schedules` автозавершение выполняется сразу (без ожидания Scheduler).
+
+При **отметке выполненной** (переход в completed, вручную или через `auto_complete`):
 
 1. Снимаются Scheduler-задачи плагина для этой записи (`Todo.task.<id>.*`).
 2. Выполняется instant-хук `completed` (код `code_on_completed` в конфиге плагина).
@@ -152,7 +155,7 @@ Capabilities доступны через:
 
 Код джоба вызывает `callPluginFunction("Todo", "run_task_event", ...)`. Метод плагина `run_task_event` выполняется внутри Flask `app_context`, чтобы ORM и БД работали из потока Scheduler.
 
-Приоритет кода хука: поле в `tasks.settings` → значение по умолчанию в конфиге плагина → событие пропускается, если код пустой.
+Приоритет кода хука: поле в `tasks.settings` → значение по умолчанию в конфиге плагина → событие пропускается, если код пустой (исключение: `finish` при `auto_complete=true` всё равно обрабатывается для автозавершения).
 
 ## 8. Примеры MCP запросов
 
