@@ -172,7 +172,18 @@
           </div>
           <div class="mb-2">
             <label class="form-label small mb-0">{{ _('Description') }}</label>
-            <textarea class="form-control" v-model="taskForm.notes" rows="3"></textarea>
+            <ul class="nav nav-tabs nav-tabs-sm" role="tablist">
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" :class="{ active: notesTab === 'view' }" type="button" @click="notesTab = 'view'">{{ _('View') }}</button>
+              </li>
+              <li class="nav-item" role="presentation">
+                <button class="nav-link" :class="{ active: notesTab === 'text' }" type="button" @click="notesTab = 'text'">{{ _('Text') }}</button>
+              </li>
+            </ul>
+            <div class="tab-content border border-top-0 rounded-bottom p-2">
+              <div v-if="notesTab === 'view'" class="todo-cal-notes-view" v-html="notesHtml"></div>
+              <textarea v-else class="form-control" v-model="taskForm.notes" rows="4"></textarea>
+            </div>
           </div>
           <div class="row g-2">
             <div class="col-sm-6">
@@ -269,6 +280,7 @@
       maxMonthTasks: 4,
       taskForm: null,
       taskFormError: '',
+      notesTab: 'view',
       weekDayNames: ['{{ _('Mon') }}', '{{ _('Tue') }}', '{{ _('Wed') }}', '{{ _('Thu') }}', '{{ _('Fri') }}', '{{ _('Sat') }}', '{{ _('Sun') }}'],
       monthNames: [
         '{{ _('January') }}', '{{ _('February') }}', '{{ _('March') }}', '{{ _('April') }}', '{{ _('May') }}', '{{ _('June') }}',
@@ -303,6 +315,12 @@
       hideCompleted(v) { localStorage.todo_cal_hideCompleted = v; },
     },
     computed: {
+      notesHtml() {
+        if (this.taskForm && this.taskForm.notes) {
+          return this.taskForm.notes.replace(/\n/g, '<br>');
+        }
+        return '';
+      },
       scheduledTasks() {
         let data = this.tasks.filter(t => !!t.started);
         if (this.filterListId != null) {
@@ -568,6 +586,7 @@
         if (!task) return;
         this.taskFormError = '';
         this.taskForm = this.buildTaskForm(task);
+        this.notesTab = 'view';
         const el = document.getElementById('calTaskModal');
         if (!this._taskModal) this._taskModal = new bootstrap.Modal(el);
         this._taskModal.show();
@@ -794,5 +813,10 @@
     .todo-cal-month-cell {
       min-height: 5rem;
     }
+.todo-cal-notes-view {
+    min-height: 5rem;
+    max-height: 20rem;
+    overflow: auto;
+    white-space: normal;
   }
 </style>
