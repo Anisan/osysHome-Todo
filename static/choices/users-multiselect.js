@@ -53,7 +53,9 @@
       item.appendChild(row);
     });
 
-    var selectedItems = wrapper.querySelectorAll(".choices__list--multiple .choices__item[data-value]");
+    var selectedItems = wrapper.querySelectorAll(
+      ".choices__list--multiple .choices__item[data-value], .choices__list--single .choices__item[data-value]"
+    );
     selectedItems.forEach(function (item) {
       if (item.querySelector(".tlg-choice-item")) return;
       var value = String(item.dataset.value || "");
@@ -65,8 +67,10 @@
       row.className = "tlg-choice-item";
       var name = document.createElement("span");
       name.className = "tlg-choice-name";
-      name.textContent = text.trim();
-      row.appendChild(avatarNode(meta));
+      name.textContent = (text || meta.text || value).trim();
+      if (value) {
+        row.appendChild(avatarNode(meta));
+      }
       row.appendChild(name);
       item.appendChild(row);
       if (removeBtn) item.appendChild(removeBtn);
@@ -134,6 +138,35 @@
     });
   }
 
+  function bindRefresh(selectEl, instance, avatarMap, withActions) {
+    var wrapper = selectEl.closest(".choices");
+    if (!wrapper) {
+      selectEl.classList.remove("todo-awaiting-choices");
+      return instance;
+    }
+
+    function refreshUI() {
+      decorateItems(wrapper, avatarMap);
+      if (withActions) {
+        insertActions(wrapper, instance, selectEl);
+      }
+    }
+
+    refreshUI();
+    selectEl.addEventListener("showDropdown", refreshUI);
+    selectEl.addEventListener("addItem", refreshUI);
+    selectEl.addEventListener("removeItem", refreshUI);
+    selectEl.addEventListener("search", refreshUI);
+    selectEl.addEventListener("change", refreshUI);
+
+    var observer = new MutationObserver(refreshUI);
+    observer.observe(wrapper, { childList: true, subtree: true });
+    selectEl._todoChoicesObserver = observer;
+
+    selectEl.classList.remove("todo-awaiting-choices");
+    return instance;
+  }
+
   function init(selectEl) {
     if (!selectEl) return null;
     destroy(selectEl);
@@ -151,35 +184,41 @@
       itemSelectText: ""
     });
     selectEl._todoChoicesInstance = instance;
+    return bindRefresh(selectEl, instance, avatarMap, true);
+  }
 
-    var wrapper = selectEl.closest(".choices");
-    if (!wrapper) {
+  /** Одиночный select исполнителя с аватарками (без multi-actions). */
+  function initSingle(selectEl) {
+    if (!selectEl) return null;
+    destroy(selectEl);
+    if (!window.Choices) {
       selectEl.classList.remove("todo-awaiting-choices");
-      return instance;
+      return null;
     }
 
-    function refreshUI() {
-      decorateItems(wrapper, avatarMap);
-      insertActions(wrapper, instance, selectEl);
-    }
+    var avatarMap = getAvatarMap(selectEl);
+    var instance = new window.Choices(selectEl, {
+      removeItemButton: false,
+      searchEnabled: true,
+      searchResultLimit: 1000,
+      shouldSort: false,
+      itemSelectText: "",
+      shouldSortItems: false
+    });
+    selectEl._todoChoicesInstance = instance;
+    return bindRefresh(selectEl, instance, avatarMap, false);
+  }
 
-    refreshUI();
-    selectEl.addEventListener("showDropdown", refreshUI);
-    selectEl.addEventListener("addItem", refreshUI);
-    selectEl.addEventListener("removeItem", refreshUI);
-    selectEl.addEventListener("search", refreshUI);
-
-    var observer = new MutationObserver(refreshUI);
-    observer.observe(wrapper, { childList: true, subtree: true });
-    selectEl._todoChoicesObserver = observer;
-
-    selectEl.classList.remove("todo-awaiting-choices");
-    return instance;
+  function getValue(selectEl) {
+    var values = getValues(selectEl);
+    return values.length ? values[0] : "";
   }
 
   window.TodoUsersMultiSelect = {
     init: init,
+    initSingle: initSingle,
     destroy: destroy,
-    getValues: getValues
+    getValues: getValues,
+    getValue: getValue
   };
 })();

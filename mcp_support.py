@@ -179,7 +179,11 @@ def mcp_capabilities() -> dict:
         ],
         "operation_schemas": {
             "complete_task": {
-                "description": "Toggle task completed datetime (set to now or clear)",
+                "description": (
+                    "Toggle task completed datetime (set to now or clear). "
+                    "Completing a parent completes all descendants; completing all children "
+                    "auto-completes the parent. Uncompleting cascades to descendants and ancestors."
+                ),
                 "params": {
                     "type": "object",
                     "properties": {
@@ -282,11 +286,14 @@ def mcp_capabilities() -> dict:
             "all_day=true stores dates at day start (started) and day end 23:59:59 (finished/completed).",
             "Without started the task is a plain note: no Scheduler jobs and no hooks (unless force=true).",
             "complete_task sets finished and completed, or clears both.",
-            "Task settings.settings: reminder_enabled, reminder_offset_minutes, reminder/start/finish_code, auto_complete, notified, recurrence_cron.",
+            "Task settings.settings: reminder_enabled, reminder_offset_minutes, reminder/start/finish/completed_code, auto_complete, notified, recurrence_cron.",
             "finish event runs finish_code (or default); auto_complete=true also marks the task completed at planned finished.",
-            "Plugin config: default_reminder/start/finish_code, code_on_create/delete/notified/completed.",
+            "On complete: completed_code (or plugin code_on_completed). Plugin config: default_reminder/start/finish_code, code_on_create/delete/notified/completed.",
             "On complete (manual or auto_complete) with recurrence_cron: current task stays completed; a new copy is created for the next cron slot.",
-            "Hook code runtime vars: task (dict with title, notes, ...), task_id, event, params, logger.",
+            "parent_id nests tasks (unlimited depth, same list); delete cascades to all descendants.",
+            "complete_task: completing parent completes descendants; all children done auto-completes parent; uncomplete cascades to descendants and ancestors.",
+            "Hook code runtime vars: task (dict with title, notes, extra, ...), task_id, event, params, logger.",
+            "Task.extra: opaque text/JSON for import ids etc.; writable via MCP/API, not shown in UI.",
             "Use collection hooks + validate_entity_code / run_entity_dry to test hook Python (context: task_id, event).",
             "MCP has full access to all lists and tasks (no per-user ACL).",
         ],
@@ -378,6 +385,10 @@ def mcp_entity_schema(collection: str) -> dict:
                     "type": ["integer", "null"],
                     "description": "Parent list id",
                 },
+                "parent_id": {
+                    "type": ["integer", "null"],
+                    "description": "Parent task id for unlimited nesting (null = root task; must be same list)",
+                },
                 "title": {
                     "type": "string",
                     "description": "Task title",
@@ -385,6 +396,13 @@ def mcp_entity_schema(collection: str) -> dict:
                 "notes": {
                     "type": "string",
                     "description": "Task description",
+                },
+                "extra": {
+                    "type": ["string", "object", "array", "null"],
+                    "description": (
+                        "Opaque extra data (e.g. external calendar import id). "
+                        "Not shown in UI; free text or JSON object/array"
+                    ),
                 },
                 "tags": {
                     "type": "string",
@@ -469,12 +487,20 @@ def mcp_entity_schema(collection: str) -> dict:
                                 "default_finish_code. Does not mark completed."
                             ),
                         },
+                        "completed_code": {
+                            "type": "string",
+                            "description": (
+                                "Python code when task is marked completed (manual or "
+                                "auto_complete); empty uses plugin code_on_completed"
+                            ),
+                        },
                         "auto_complete": {
                             "type": "boolean",
                             "default": False,
                             "description": (
                                 "If true, at planned finished the task is marked completed "
-                                "(Scheduler finish job); recurrence and code_on_completed apply"
+                                "(Scheduler finish job); recurrence and completed_code/"
+                                "code_on_completed apply"
                             ),
                         },
                         "notified": {
@@ -553,7 +579,12 @@ def mcp_list_entities(
                 q = q.filter(TodoTask.completed.is_(None))
             if query:
                 like = f"%{query}%"
-                q = q.filter(or_(TodoTask.title.ilike(like), TodoTask.notes.ilike(like), TodoTask.tags.ilike(like)))
+                q = q.filter(or_(
+                    TodoTask.title.ilike(like),
+                    TodoTask.notes.ilike(like),
+                    TodoTask.tags.ilike(like),
+                    TodoTask.extra.ilike(like),
+                ))
             rows = q.order_by(TodoTask.updated.desc(), TodoTask.id.desc()).limit(limit).all()
             return [task_service.task_to_dict(row) for row in rows]
         if collection == HOOKS:
@@ -652,7 +683,13 @@ def _resolve_hook_source(event: str, task_settings: dict, plugin_settings: dict)
         if (plugin_settings.get(default_key) or "").strip():
             return "plugin"
         return "none"
-    key = f"code_on_{event}" if event in ("create", "delete", "notified", "completed") else ""
+    if event == "completed":
+        if (task_settings.get("completed_code") or "").strip():
+            return "task"
+        if (plugin_settings.get("code_on_completed") or "").strip():
+            return "plugin"
+        return "none"
+    key = f"code_on_{event}" if event in ("create", "delete", "notified") else ""
     if key and (plugin_settings.get(key) or "").strip():
         return "plugin"
     return "none"
@@ -665,8 +702,13 @@ def mcp_invoke(operation: str, params: dict = None) -> dict:
             task_id = params.get("task_id")
             if task_id in (None, ""):
                 raise ValueError("task_id is required")
-            task = task_service.toggle_task_complete(int(task_id))
-            return {"ok": True, "operation": operation, "task": task_service.task_to_dict(task)}
+            task, affected = task_service.toggle_task_complete(int(task_id))
+            return {
+                "ok": True,
+                "operation": operation,
+                "task": task_service.task_to_dict(task),
+                "affected": [task_service.task_to_dict(item) for item in affected],
+            }
         if operation == "reorder_lists":
             ordered_ids = params.get("ids") or params.get("order")
             if not ordered_ids or not isinstance(ordered_ids, list):
@@ -764,7 +806,10 @@ def mcp_entity_revision(collection: str, entity_id) -> str:
         return revision_from_dict(entity, keys=["id", "title", "tags", "sort_order"])
     return revision_from_dict(
         entity,
-        keys=["id", "list_id", "title", "notes", "tags", "started", "finished", "priority", "completed", "settings"],
+        keys=[
+            "id", "list_id", "parent_id", "title", "notes", "extra", "tags",
+            "started", "finished", "priority", "completed", "settings",
+        ],
     )
 
 
@@ -792,6 +837,15 @@ def mcp_validate_entity(collection: str, payload: dict, entity_id=None) -> dict:
             row = TodoTask.query.get(int(entity_id))
             if row is None:
                 return {"ok": False, "errors": [{"field": "id", "message": f"task not found: {entity_id}"}]}
+        parent_id = payload.get("parent_id")
+        if parent_id not in (None, ""):
+            parent = TodoTask.query.get(int(parent_id))
+            if parent is None:
+                return {"ok": False, "errors": [{"field": "parent_id", "message": f"parent task not found: {parent_id}"}]}
+            if list_id not in (None, "") and parent.list_id != int(list_id):
+                return {"ok": False, "errors": [{"field": "parent_id", "message": "parent must be in the same list"}]}
+            if entity_id not in (None, "") and int(parent_id) == int(entity_id):
+                return {"ok": False, "errors": [{"field": "parent_id", "message": "task cannot be its own parent"}]}
 
     if collection == LISTS:
         if entity_id not in (None, ""):

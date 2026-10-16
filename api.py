@@ -166,8 +166,12 @@ class EndpointTaskComplete(Resource):
     def get(self,task_id: int):
         """ Switch task complited"""
         try:
-            task = task_service.toggle_task_complete(int(task_id))
-            return {"success": True, "result": task_service.task_to_dict(task)}, 200
+            task, affected = task_service.toggle_task_complete(int(task_id))
+            return {
+                "success": True,
+                "result": task_service.task_to_dict(task),
+                "affected": [task_service.task_to_dict(item) for item in affected],
+            }, 200
         except NotFoundError:
             return {"success": False, "msg": "Task not found"}, 404
         except PermissionError:

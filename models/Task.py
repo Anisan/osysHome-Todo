@@ -4,8 +4,10 @@ from app.database import Column, SurrogatePK, db
 class TodoTask(SurrogatePK, db.Model):
     __tablename__ = 'todo_tasks'
     list_id = Column(db.Integer)
+    parent_id = Column(db.Integer)  # NULL = корневая задача
     title = Column(db.String(255))
     notes = Column(db.Text)
+    extra = Column(db.Text)  # доп. данные (внешний id импорта и т.п.); без UI
     tags = Column(db.Text)
     finished = Column(db.DateTime)
     priority = Column(db.Integer, default=1)

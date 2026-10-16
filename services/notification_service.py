@@ -7,8 +7,7 @@ import ast
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
-from app.core.lib.common import addScheduledJob, clearScheduledJob
-from app.core.lib.execute import execute_and_capture_output
+from app.core.lib.common import addScheduledJob, clearScheduledJob, runCode
 from app.logging_config import getLogger
 from app.database import convert_utc_to_local, get_now_to_utc, row2dict
 from plugins.Todo.models.Task import TodoTask
@@ -22,6 +21,7 @@ DEFAULT_TASK_SETTINGS: Dict[str, Any] = {
     "reminder_code": "",
     "start_code": "",
     "finish_code": "",
+    "completed_code": "",
     "auto_complete": False,
     "notified": False,
     "recurrence_cron": "",
@@ -121,8 +121,7 @@ def _execute_task_code(code: str, task_snapshot: dict, task_id: int, event: str)
         "event": event,
         "logger": _logger,
     }
-    output, error = execute_and_capture_output(code, variables)
-    return output, not error
+    return runCode(code, execution_source="Todo", variables=variables)
 
 
 def validate_hook_code(code: str) -> dict:
@@ -192,7 +191,11 @@ def _resolve_code(event: str, task_settings: dict, plugin_settings: dict) -> str
     if event == "notified":
         return (plugin_settings.get("code_on_notified") or "").strip()
     if event == "completed":
-        return (plugin_settings.get("code_on_completed") or "").strip()
+        return (
+            task_settings.get("completed_code")
+            or plugin_settings.get("code_on_completed")
+            or ""
+        ).strip()
     return ""
 
 
@@ -318,6 +321,7 @@ def run_task_event(
             from plugins.Todo.services import task_service
 
             task_service.toggle_task_complete(int(task_id))
+            # Каскад parent/children обрабатывается внутри toggle_task_complete
             result["auto_completed"] = True
         except Exception as ex:
             _logger.exception("Todo task %s: auto_complete at finish failed: %s", task_id, ex)

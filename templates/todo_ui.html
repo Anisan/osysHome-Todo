@@ -50,6 +50,8 @@
   'start_code_help': _('Runs at "Start" date via Scheduler'),
   'finish_code': _('Task finish code'),
   'finish_code_help': _('Runs at the planned Finish time via Scheduler. Does not mark the task completed unless auto-complete is enabled on the Main tab.'),
+  'completed_code': _('Task completion code'),
+  'completed_code_help': _('Runs when the task is marked completed (manually or by auto-complete). Empty — uses plugin code_on_completed.'),
   'auto_complete': _('Auto-complete at Finish time'),
   'auto_complete_help': _('When enabled, at the planned Finish time the task is marked completed (Scheduler). Recurrence and code_on_completed then apply as on manual complete.'),
   'recurrence_cron': _('Recurrence cron'),
@@ -73,6 +75,7 @@
   'in_progress': _('In progress'),
   'delete_task_title': _('Delete task?'),
   'delete_task_confirm': _('Are you sure you want to delete "{title}"?'),
+  'delete_task_with_children': _('Are you sure you want to delete "{title}"? {count} subtask(s) will also be deleted.'),
   'task_fallback': _('task'),
   'delete_list_title': _('Delete list?'),
   'delete_list_confirm': _('Delete list "{title}" and all its tasks?'),
@@ -84,7 +87,15 @@
   'read_only_viewers': _('Read-only viewers'),
   'select_all_users': _('Select all users'),
   'clear_selected_users': _('Clear selected users'),
-  'access_denied': _('Access denied')
+  'access_denied': _('Access denied'),
+  'subtask': _('Subtask'),
+  'add_subtask': _('Add subtask'),
+  'parent_task': _('Parent task'),
+  'no_parent': _('No parent'),
+  'select_task': _('Select a task'),
+  'edit': _('Edit'),
+  'link_url_prompt': _('Enter link URL'),
+  'checklist_item': _('Checklist item')
 } %}
 <div id="list_tasks" v-cloak>
     <!-- Навигация по вкладкам -->
@@ -176,107 +187,184 @@
       </div>
     </div>
 
-    <!-- Список задач -->
-    <div v-for="task in filteredTasks" :key="task.id" class="accordion">
-      <div class="accordion-item" :class="{ 'task-item-completed': task.completed }">
-        <h2 class="d-flex justify-content-between align-items-center accordion-header" :id="'heading' + task.id">
+    <!-- Master-detail: дерево + панель деталей -->
+    <div class="row g-3 todo-master-detail">
+      <div class="col-lg-5 col-xl-4">
+        <div class="todo-tree-panel border rounded">
           <div
-            class="accordion-button p-2 flex-grow-1"
-            :class="{ collapsed: expandedTaskId !== task.id }"
-            type="button"
-            @click.stop="toggleTask(task.id)"
+            v-for="row in taskRows"
+            :key="row.task.id"
+            class="todo-tree-row d-flex align-items-center"
+            :class="{
+              'task-item-completed': row.task.completed,
+              'todo-tree-row-selected': selectedTaskId === row.task.id
+            }"
+            :style="{ paddingLeft: (0.5 + row.depth * 1.1) + 'rem' }"
+            @click="selectTask(row.task.id)"
           >
             <input
               type="checkbox"
-              class="form-check-input me-2"
-              :checked="!!task.completed"
-              :disabled="!taskCanComplete(task)"
-              @click.stop="complete(task.id)"
+              class="form-check-input me-2 flex-shrink-0"
+              :checked="!!row.task.completed"
+              :disabled="!taskCanComplete(row.task)"
+              @click.stop="complete(row.task.id)"
             />
-            <span :class="{ 'task-completed': task.completed }">[[ task.title ]]</span>
+            <button
+              v-if="row.hasChildren"
+              type="button"
+              class="btn btn-sm btn-link text-muted p-0 me-1 todo-tree-chevron"
+              @click.stop="toggleCollapse(row.task.id)"
+            >
+              <i class="fas" :class="isCollapsed(row.task.id) ? 'fa-chevron-right' : 'fa-chevron-down'"></i>
+            </button>
+            <span class="todo-tree-title text-truncate flex-grow-1" :class="{ 'task-completed': row.task.completed }">
+              [[ row.task.title ]]
+            </span>
+            <img
+              v-if="row.task.assignee"
+              class="todo-user-avatar todo-user-avatar-sm ms-1 flex-shrink-0"
+              :src="userAvatarUrl(row.task.assignee)"
+              :alt="row.task.assignee"
+              :title="row.task.assignee"
+              @error="onUserAvatarError"
+            />
             <span
-              v-if="task.priority != null && task.priority !== 1"
-              class="badge ms-2"
-              :class="priorityClass(task.priority)"
-            >[[ priorityLabel(task.priority) ]]</span>
+              v-if="row.task.priority != null && row.task.priority !== 1"
+              class="badge ms-1 flex-shrink-0"
+              :class="priorityClass(row.task.priority)"
+            >[[ priorityLabel(row.task.priority) ]]</span>
             <span
-              v-if="task.started && task.settings && task.settings.reminder_enabled"
-              class="badge bg-secondary ms-1"
+              v-if="row.task.started && row.task.settings && row.task.settings.reminder_enabled"
+              class="badge bg-secondary ms-1 flex-shrink-0"
               :title="i18n.reminder_enabled"
             ><i class="fas fa-bell"></i></span>
-            <span
-              v-if="task.started && task.settings && task.settings.notified"
-              class="badge bg-info ms-1"
-              :title="i18n.notification_confirmed"
-            ><i class="fas fa-bell-slash"></i></span>
+            <div class="todo-tree-actions d-flex flex-shrink-0 ms-1" @click.stop>
+              <button
+                v-if="currentListCanCreateTask"
+                class="btn btn-sm btn-link text-success p-0 px-1"
+                :title="i18n.add_subtask"
+                @click="openTaskModalCreateSubtask(row.task.id)"
+              ><i class="fas fa-plus"></i></button>
+              <button
+                v-if="row.task.started && row.task.settings && row.task.settings.reminder_enabled && !row.task.settings.notified && taskCanNotify(row.task)"
+                class="btn btn-sm btn-link text-info p-0 px-1"
+                :title="i18n.mark_notification"
+                @click="markNotified(row.task.id)"
+              ><i class="fas fa-bell"></i></button>
+              <button
+                v-if="taskCanEdit(row.task)"
+                class="btn btn-sm btn-link text-secondary p-0 px-1"
+                :title="i18n.edit"
+                @click="openTaskModalEdit(row.task.id)"
+              ><i class="fas fa-pencil"></i></button>
+              <button
+                v-if="taskCanDelete(row.task)"
+                class="btn btn-sm btn-link text-danger p-0 px-1"
+                :title="i18n.delete"
+                @click="askRemoveTask(row.task.id)"
+              ><i class="fas fa-trash"></i></button>
+            </div>
           </div>
-          <div class="d-flex">
-            <button
-              v-if="task.started && task.settings && task.settings.reminder_enabled && !task.settings.notified && taskCanNotify(task)"
-              class="btn btn-sm btn-outline-info"
-              :title="i18n.mark_notification"
-              @click.stop="markNotified(task.id)"
-            >
-              <i class="fas fa-bell"></i>
-            </button>
-            <button
-              v-if="taskCanEdit(task)"
-              class="btn btn-sm btn-outline-secondary"
-              @click.stop="openTaskModalEdit(task.id)"
-            >
-              <i class="fas fa-pencil"></i>
-            </button>
-            <button
-              v-if="taskCanDelete(task)"
-              class="btn btn-sm btn-outline-danger"
-              @click.stop="askRemoveTask(task.id)"
-            >
-              <i class="fas fa-trash"></i>
-            </button>
-          </div>
-        </h2>
+          <p v-if="taskRows.length === 0" class="text-muted mb-0 p-3">{{ _('No tasks') }}</p>
+        </div>
+      </div>
 
-        <div
-          :id="'collapse' + task.id"
-          class="accordion-collapse collapse"
-          :class="{ show: expandedTaskId === task.id }"
-          :aria-labelledby="'heading' + task.id"
-        >
-          <div class="accordion-body">
-            <p class="notes" v-if="task.notes">[[ task.notes ]]</p>
-            <p class="notes text-muted" v-else>{{ _('No description') }}</p>
-            <div class="small text-muted mt-2 todo-task-meta">
-              <div v-if="taskStart(task)">
-                <i class="far fa-calendar-plus me-1"></i>{{ _('Start') }}: [[ formatTaskWhen(task, taskStart(task)) ]]
-              </div>
-              <div v-if="task.finished" class="mt-1">
-                <i class="far fa-calendar-check me-1"></i>{{ _('Finish') }}: [[ formatTaskWhen(task, task.finished) ]]
-              </div>
-              <div v-if="taskDurationLabel(task)" class="mt-1">
-                <i class="far fa-clock me-1"></i>[[ taskDurationLabel(task) ]]
-              </div>
-              <div v-if="task.priority > 0" class="mt-1">
-                <i class="fas fa-flag me-1"></i>[[ priorityLabel(task.priority) ]]
-              </div>
-              <div v-if="task.list_id" class="mt-1">
-                <i class="fas fa-list me-1"></i>{{ _('List') }}: [[ listTitle(task.list_id) ]]
-              </div>
-              <div v-if="task.created_by" class="mt-1">
-                <i class="fas fa-user me-1"></i>{{ _('Creator') }}: [[ task.created_by ]]
-              </div>
-              <div v-if="task.assignee" class="mt-1">
-                <i class="fas fa-user-check me-1"></i>{{ _('Assignee') }}: [[ task.assignee ]]
-              </div>
-              <div v-if="task.viewers && task.viewers.length" class="mt-1">
-                <i class="fas fa-eye me-1"></i>{{ _('Viewers') }}: [[ task.viewers.join(', ') ]]
-              </div>
+      <div class="col-lg-7 col-xl-8">
+        <div class="todo-detail-panel border rounded p-3 h-100" v-if="selectedTask">
+          <div class="d-flex flex-wrap align-items-start justify-content-between gap-2 mb-2">
+            <h5 class="mb-0" :class="{ 'task-completed': selectedTask.completed }">[[ selectedTask.title ]]</h5>
+            <div class="d-flex flex-wrap gap-1">
+              <button
+                v-if="currentListCanCreateTask"
+                class="btn btn-sm btn-outline-success"
+                @click="openTaskModalCreateSubtask(selectedTask.id)"
+              ><i class="fas fa-plus me-1"></i>[[ i18n.add_subtask ]]</button>
+              <button
+                v-if="taskCanEdit(selectedTask)"
+                class="btn btn-sm btn-outline-secondary"
+                @click="openTaskModalEdit(selectedTask.id)"
+              ><i class="fas fa-pencil me-1"></i>[[ i18n.edit ]]</button>
+              <button
+                v-if="taskCanDelete(selectedTask)"
+                class="btn btn-sm btn-outline-danger"
+                @click="askRemoveTask(selectedTask.id)"
+              ><i class="fas fa-trash me-1"></i>[[ i18n.delete ]]</button>
+            </div>
+          </div>
+          <div
+            v-if="selectedTask.notes"
+            class="todo-notes-view todo-detail-notes mb-3"
+            :class="{ 'todo-notes-readonly': !taskCanEdit(selectedTask) }"
+            v-html="formatNotesHtml(selectedTask.notes)"
+            @change="onDetailNotesCheckboxChange"
+          ></div>
+          <p v-else class="text-muted mb-3">{{ _('No description') }}</p>
+          <div class="small text-muted todo-task-meta">
+            <div v-if="taskStart(selectedTask)">
+              <i class="far fa-calendar-plus me-1"></i>{{ _('Start') }}: [[ formatTaskWhen(selectedTask, taskStart(selectedTask)) ]]
+            </div>
+            <div v-if="selectedTask.finished" class="mt-1">
+              <i class="far fa-calendar-check me-1"></i>{{ _('Finish') }}: [[ formatTaskWhen(selectedTask, selectedTask.finished) ]]
+            </div>
+            <div v-if="taskDurationLabel(selectedTask)" class="mt-1">
+              <i class="far fa-clock me-1"></i>[[ taskDurationLabel(selectedTask) ]]
+            </div>
+            <div v-if="selectedTask.priority != null" class="mt-1">
+              <i class="fas fa-flag me-1"></i>[[ priorityLabel(selectedTask.priority) ]]
+            </div>
+            <div v-if="selectedTask.list_id" class="mt-1">
+              <i class="fas fa-list me-1"></i>{{ _('List') }}: [[ listTitle(selectedTask.list_id) ]]
+            </div>
+            <div v-if="selectedTask.parent_id" class="mt-1">
+              <i class="fas fa-sitemap me-1"></i>[[ i18n.parent_task ]]: [[ taskTitle(selectedTask.parent_id) ]]
+            </div>
+            <div v-if="selectedTask.created_by" class="mt-1 d-flex align-items-center flex-wrap gap-1">
+              <span class="text-nowrap"><i class="fas fa-user me-1"></i>{{ _('Creator') }}:</span>
+              <span class="todo-user-chip">
+                <img
+                  class="todo-user-avatar"
+                  :src="userAvatarUrl(selectedTask.created_by)"
+                  :alt="selectedTask.created_by"
+                  @error="onUserAvatarError"
+                />
+                <span>[[ selectedTask.created_by ]]</span>
+              </span>
+            </div>
+            <div v-if="selectedTask.assignee" class="mt-1 d-flex align-items-center flex-wrap gap-1">
+              <span class="text-nowrap"><i class="fas fa-user-check me-1"></i>{{ _('Assignee') }}:</span>
+              <span class="todo-user-chip">
+                <img
+                  class="todo-user-avatar"
+                  :src="userAvatarUrl(selectedTask.assignee)"
+                  :alt="selectedTask.assignee"
+                  @error="onUserAvatarError"
+                />
+                <span>[[ selectedTask.assignee ]]</span>
+              </span>
+            </div>
+            <div v-if="selectedTask.viewers && selectedTask.viewers.length" class="mt-1 d-flex align-items-center flex-wrap gap-1">
+              <span class="text-nowrap"><i class="fas fa-eye me-1"></i>{{ _('Viewers') }}:</span>
+              <span
+                v-for="name in selectedTask.viewers"
+                :key="'viewer-chip-' + name"
+                class="todo-user-chip"
+              >
+                <img
+                  class="todo-user-avatar"
+                  :src="userAvatarUrl(name)"
+                  :alt="name"
+                  @error="onUserAvatarError"
+                />
+                <span>[[ name ]]</span>
+              </span>
             </div>
           </div>
         </div>
+        <div class="todo-detail-panel border rounded p-4 text-muted h-100 d-flex align-items-center justify-content-center" v-else>
+          [[ i18n.select_task ]]
+        </div>
       </div>
     </div>
-
-    <p v-if="filteredTasks.length === 0" class="text-muted">{{ _('No tasks') }}</p>
   </div>
 
   <!-- Модальное окно создания/редактирования задачи -->
@@ -320,27 +408,64 @@
               </li>
             </ul>
             <div class="tab-content border border-top-0 rounded-bottom p-2">
-              <div v-if="notesTab === 'view'" class="todo-notes-view" v-html="notesHtml"></div>
-              <textarea
-                v-else
-                class="form-control"
-                v-model="taskForm.notes"
-                :disabled="!taskFormCanEdit"
-                rows="4"
-                placeholder="{{ _('Task description') }}"
-              ></textarea>
+              <div
+                v-if="notesTab === 'view'"
+                class="todo-notes-view"
+                :class="{ 'todo-notes-readonly': !taskFormCanEdit }"
+                v-html="notesHtml"
+                @change="onModalNotesCheckboxChange"
+              ></div>
+              <div v-else>
+                <div v-if="taskFormCanEdit" class="todo-notes-toolbar btn-group btn-group-sm flex-wrap mb-2" role="group">
+                  <button type="button" class="btn btn-outline-secondary" title="{{ _('Bold') }}" @click="wrapNotesSelection('b')"><i class="fas fa-bold"></i></button>
+                  <button type="button" class="btn btn-outline-secondary" title="{{ _('Italic') }}" @click="wrapNotesSelection('i')"><i class="fas fa-italic"></i></button>
+                  <button type="button" class="btn btn-outline-secondary" title="{{ _('Underline') }}" @click="wrapNotesSelection('u')"><i class="fas fa-underline"></i></button>
+                  <button type="button" class="btn btn-outline-secondary" title="{{ _('Strikethrough') }}" @click="wrapNotesSelection('s')"><i class="fas fa-strikethrough"></i></button>
+                  <button type="button" class="btn btn-outline-secondary" title="{{ _('Heading') }}" @click="wrapNotesSelection('h3')"><i class="fas fa-heading"></i></button>
+                  <button type="button" class="btn btn-outline-secondary" title="{{ _('Bullet list') }}" @click="wrapNotesList('ul')"><i class="fas fa-list-ul"></i></button>
+                  <button type="button" class="btn btn-outline-secondary" title="{{ _('Numbered list') }}" @click="wrapNotesList('ol')"><i class="fas fa-list-ol"></i></button>
+                  <button type="button" class="btn btn-outline-secondary" title="{{ _('Checklist') }}" @click="wrapNotesChecklist"><i class="fas fa-check-square"></i></button>
+                  <button type="button" class="btn btn-outline-secondary" title="{{ _('Link') }}" @click="wrapNotesLink"><i class="fas fa-link"></i></button>
+                  <button type="button" class="btn btn-outline-secondary" title="{{ _('Code') }}" @click="wrapNotesSelection('code')"><i class="fas fa-code"></i></button>
+                  <button type="button" class="btn btn-outline-secondary" title="{{ _('Quote') }}" @click="wrapNotesSelection('blockquote')"><i class="fas fa-quote-right"></i></button>
+                  <button type="button" class="btn btn-outline-secondary" title="{{ _('Horizontal line') }}" @click="insertNotesHtml('<hr>')"><i class="fas fa-minus"></i></button>
+                </div>
+                <textarea
+                  ref="notesTextarea"
+                  class="form-control font-monospace"
+                  v-model="taskForm.notes"
+                  :disabled="!taskFormCanEdit"
+                  rows="6"
+                  placeholder="{{ _('Task description') }}"
+                ></textarea>
+              </div>
             </div>
           </div>
           <div class="row g-2 mb-2">
             <div class="col-sm-6" v-if="taskFormCanEdit">
               <label class="form-label small mb-0">{{ _('List') }}</label>
-              <select class="form-select" v-model.number="taskForm.list_id">
+              <select class="form-select" v-model.number="taskForm.list_id" @change="onTaskFormListChange">
                 <option v-for="list in moveTargetLists" :key="'task-list-' + list.id" :value="list.id">[[ list.title ]]</option>
               </select>
             </div>
             <div class="col-sm-6" v-else-if="taskForm.list_id">
               <label class="form-label small mb-0">{{ _('List') }}</label>
               <input type="text" class="form-control" :value="listTitle(taskForm.list_id)" readonly />
+            </div>
+            <div class="col-sm-6" v-if="taskFormCanEdit">
+              <label class="form-label small mb-0">[[ i18n.parent_task ]]</label>
+              <select class="form-select" v-model="taskForm.parent_id">
+                <option value="">[[ i18n.no_parent ]]</option>
+                <option
+                  v-for="opt in parentTaskOptions"
+                  :key="'parent-' + opt.id"
+                  :value="opt.id"
+                >[[ opt.label ]]</option>
+              </select>
+            </div>
+            <div class="col-sm-6" v-else-if="taskForm.parent_id">
+              <label class="form-label small mb-0">[[ i18n.parent_task ]]</label>
+              <input type="text" class="form-control" :value="taskTitle(taskForm.parent_id)" readonly />
             </div>
           </div>
           <div class="row g-2">
@@ -459,9 +584,18 @@
             </div>
             <div class="col-sm-6" v-if="taskFormCanEdit">
               <label class="form-label small mb-0">{{ _('Assignee') }}</label>
-              <select class="form-select" v-model="taskForm.assignee">
+              <select
+                id="taskAssigneeSelect"
+                ref="taskAssigneeSelect"
+                class="todo-awaiting-choices form-select"
+              >
                 <option value="">{{ _('No assignee') }}</option>
-                <option v-for="user in users" :key="'assignee-' + user.username" :value="user.username">[[ user.username ]]</option>
+                <option
+                  v-for="user in users"
+                  :key="'assignee-' + user.username"
+                  :value="user.username"
+                  :data-avatar-url="user.avatar_url"
+                >[[ user.username ]]</option>
               </select>
             </div>
             <div class="col-12" v-if="taskFormCanEdit">
@@ -508,6 +642,11 @@
               <label class="form-label small mb-0">{{ _('Task finish code') }}</label>
               <textarea class="form-control font-monospace" rows="4" v-model="taskForm.settings.finish_code" placeholder="{{ _('Empty - use default code from plugin settings') }}"></textarea>
               <div class="form-text">{{ _('Runs at the planned Finish time via Scheduler. Does not mark the task completed unless auto-complete is enabled on the Main tab.') }}</div>
+            </div>
+            <div class="mb-2">
+              <label class="form-label small mb-0">{{ _('Task completion code') }}</label>
+              <textarea class="form-control font-monospace" rows="4" v-model="taskForm.settings.completed_code" placeholder="{{ _('Empty - use default code from plugin settings') }}"></textarea>
+              <div class="form-text">{{ _('Runs when the task is marked completed (manually or by auto-complete). Empty — uses plugin code_on_completed.') }}</div>
             </div>
             <div v-if="!taskFormIsNew && taskForm.settings.notified" class="alert alert-info py-2 small mb-0">
               {{ _('Notification marked as delivered') }}
@@ -587,7 +726,8 @@
       listFormIsNew: false,
       editingIndex: null,
       editingName: '',
-      expandedTaskId: null,
+      selectedTaskId: null,
+      collapsedTaskIds: {},
       taskFormIsNew: true,
       defaultFinishMinutes: 30,
       taskFormError: '',
@@ -596,6 +736,7 @@
       taskForm: {
         id: null,
         list_id: null,
+        parent_id: '',
         title: '',
         notes: '',
         priority: 1,
@@ -612,6 +753,7 @@
           reminder_code: '',
           start_code: '',
           finish_code: '',
+          completed_code: '',
           auto_complete: false,
           notified: false,
           recurrence_cron: '',
@@ -650,6 +792,13 @@
         this.sortKey = 'finished';
         localStorage.todo_sortKey = 'finished';
       }
+      try {
+        const raw = localStorage.getItem('todo_collapsedTaskIds');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object') this.collapsedTaskIds = parsed;
+        }
+      } catch (e) { /* ignore */ }
       const taskModalEl = document.getElementById('taskModal');
       if (taskModalEl) {
         taskModalEl.addEventListener('hidden.bs.modal', () => {
@@ -661,41 +810,60 @@
       sortKey(value) { localStorage.todo_sortKey = value; },
       sortAsc(value) { localStorage.todo_sortAsc = value; },
       completedBottom(value) { localStorage.todo_completedBottom = value; },
-      hideCompleted(value) { localStorage.todo_hideCompleted = value; },
+      hideCompleted(value) {
+        localStorage.todo_hideCompleted = value;
+        this.ensureSelectedTaskVisible();
+      },
+      collapsedTaskIds: {
+        deep: true,
+        handler(value) {
+          localStorage.todo_collapsedTaskIds = JSON.stringify(value);
+        },
+      },
+      currentTab() {
+        this.ensureSelectedTaskVisible();
+      },
+      tasks: {
+        deep: true,
+        handler() {
+          this.ensureSelectedTaskVisible();
+        },
+      },
     },
     computed: {
       notesHtml() {
-        if (this.taskForm && this.taskForm.notes) {
-          return this.taskForm.notes.replace(/\n/g, '<br>');
-        }
-        return '';
+        return this.formatNotesHtml(this.taskForm && this.taskForm.notes);
       },
-      filteredTasks() {
+      listTasks() {
         const currentListId = this.lists[this.currentTab]?.id;
         if (!currentListId) return [];
-
         let data = this.tasks.filter(task => task.list_id === currentListId);
         if (this.hideCompleted) {
           data = data.filter(task => !task.completed);
         }
-
-        const asc = this.sortAsc ? 1 : -1;
-        data = data.slice().sort((a, b) => {
-          if (this.completedBottom && !!a.completed !== !!b.completed) {
-            return a.completed ? 1 : -1;
-          }
-          let cmp = 0;
-          if (this.sortKey === 'title') {
-            cmp = (a.title || '').localeCompare(b.title || '', 'ru');
-          } else if (this.sortKey === 'finished') {
-            cmp = this.finishedSortValue(a.finished) - this.finishedSortValue(b.finished);
-          } else if (this.sortKey === 'priority') {
-            cmp = (a.priority || 0) - (b.priority || 0);
-          }
-          if (cmp === 0) return (a.id || 0) - (b.id || 0);
-          return cmp * asc;
-        });
         return data;
+      },
+      taskRows() {
+        return this.buildVisibleRows(this.listTasks);
+      },
+      selectedTask() {
+        if (this.selectedTaskId == null) return null;
+        return this.tasks.find(t => t.id === this.selectedTaskId) || null;
+      },
+      parentTaskOptions() {
+        const listId = this.taskForm.list_id;
+        if (!listId) return [];
+        const exclude = new Set();
+        if (this.taskForm.id) {
+          exclude.add(this.taskForm.id);
+          this.collectDescendantIds(this.taskForm.id).forEach(id => exclude.add(id));
+        }
+        const pool = this.tasks.filter(t => t.list_id === listId && !exclude.has(t.id));
+        const rows = this.buildVisibleRows(pool, { ignoreCollapse: true });
+        return rows.map(row => ({
+          id: row.task.id,
+          label: `${'— '.repeat(row.depth)}${row.task.title || ('#' + row.task.id)}`,
+        }));
       },
       taskModalTitle() {
         return this.taskFormIsNew ? this.i18n.new_task : this.i18n.edit_task;
@@ -841,6 +1009,7 @@
         if (item.priority === null || item.priority === undefined) {
           item.priority = 1;
         }
+        item.parent_id = item.parent_id != null && item.parent_id !== '' ? Number(item.parent_id) : null;
         item.settings = this.normalizeTaskSettings(item.settings);
         item.viewers = Array.isArray(item.viewers) ? item.viewers : [];
         item.assignee = item.assignee || '';
@@ -852,6 +1021,269 @@
         item.all_day = !!item.all_day;
         return item;
       },
+      formatNotesHtml(notes) {
+        if (!notes) return '';
+        return String(notes).replace(/\n/g, '<br>');
+      },
+      isNotesCheckboxTag(tag) {
+        return /<input\b/i.test(tag) && /\btype\s*=\s*["']?checkbox["']?/i.test(tag);
+      },
+      setCheckboxTagChecked(tag, checked) {
+        let next = tag.replace(/\s+checked(\s*=\s*(["'][^"']*["']|checked))?/gi, '');
+        if (!checked) {
+          return next;
+        }
+        if (/\/>\s*$/.test(next)) {
+          return next.replace(/\s*\/>\s*$/, ' checked />');
+        }
+        return next.replace(/\s*>\s*$/, ' checked>');
+      },
+      setNthCheckboxInNotes(notes, index, checked) {
+        let seen = 0;
+        return String(notes || '').replace(/<input\b[^>]*>/gi, (tag) => {
+          if (!this.isNotesCheckboxTag(tag)) return tag;
+          if (seen !== index) {
+            seen += 1;
+            return tag;
+          }
+          seen += 1;
+          return this.setCheckboxTagChecked(tag, checked);
+        });
+      },
+      checkboxIndexInContainer(container, target) {
+        const boxes = Array.prototype.slice.call(
+          container.querySelectorAll('input[type="checkbox"]')
+        );
+        return boxes.indexOf(target);
+      },
+      onModalNotesCheckboxChange(event) {
+        const target = event.target;
+        if (!target || target.type !== 'checkbox') return;
+        if (!this.taskFormCanEdit) {
+          target.checked = !target.checked;
+          return;
+        }
+        const index = this.checkboxIndexInContainer(event.currentTarget, target);
+        if (index < 0) return;
+        this.taskForm.notes = this.setNthCheckboxInNotes(
+          this.taskForm.notes || '',
+          index,
+          target.checked
+        );
+      },
+      async onDetailNotesCheckboxChange(event) {
+        const target = event.target;
+        if (!target || target.type !== 'checkbox') return;
+        const task = this.selectedTask;
+        if (!task) return;
+        if (!this.taskCanEdit(task)) {
+          target.checked = !target.checked;
+          return;
+        }
+        const index = this.checkboxIndexInContainer(event.currentTarget, target);
+        if (index < 0) return;
+        const previousNotes = task.notes || '';
+        const notes = this.setNthCheckboxInNotes(previousNotes, index, target.checked);
+        const taskIndex = this.tasks.findIndex(item => item.id === task.id);
+        if (taskIndex >= 0) {
+          this.$set(this.tasks, taskIndex, { ...this.tasks[taskIndex], notes });
+        }
+        try {
+          const res = await axios.post(`/api/Todo/task/${task.id}`, {
+            id: task.id,
+            title: task.title,
+            notes,
+          });
+          if (!res.data.success) {
+            throw new Error(res.data.msg || this.i18n.save_failed);
+          }
+          this.mergeTaskUpdates([res.data.result]);
+        } catch (err) {
+          target.checked = !target.checked;
+          if (taskIndex >= 0) {
+            this.$set(this.tasks, taskIndex, { ...this.tasks[taskIndex], notes: previousNotes });
+          }
+        }
+      },
+      taskTitle(taskId) {
+        const task = this.tasks.find(item => item.id === taskId);
+        return task ? task.title : '';
+      },
+      compareTasks(a, b) {
+        const asc = this.sortAsc ? 1 : -1;
+        if (this.completedBottom && !!a.completed !== !!b.completed) {
+          return a.completed ? 1 : -1;
+        }
+        let cmp = 0;
+        if (this.sortKey === 'title') {
+          cmp = (a.title || '').localeCompare(b.title || '', 'ru');
+        } else if (this.sortKey === 'finished') {
+          cmp = this.finishedSortValue(a.finished) - this.finishedSortValue(b.finished);
+        } else if (this.sortKey === 'priority') {
+          cmp = (a.priority || 0) - (b.priority || 0);
+        }
+        if (cmp === 0) return (a.id || 0) - (b.id || 0);
+        return cmp * asc;
+      },
+      buildChildrenMap(tasks) {
+        const byParent = {};
+        tasks.forEach(task => {
+          const key = task.parent_id == null ? 'root' : String(task.parent_id);
+          if (!byParent[key]) byParent[key] = [];
+          byParent[key].push(task);
+        });
+        Object.keys(byParent).forEach(key => {
+          byParent[key].sort((a, b) => this.compareTasks(a, b));
+        });
+        return byParent;
+      },
+      buildVisibleRows(tasks, options) {
+        const ignoreCollapse = !!(options && options.ignoreCollapse);
+        const byParent = this.buildChildrenMap(tasks);
+        const rows = [];
+        const walk = (parentKey, depth) => {
+          const children = byParent[parentKey] || [];
+          children.forEach(task => {
+            const childKey = String(task.id);
+            const hasChildren = !!(byParent[childKey] && byParent[childKey].length);
+            rows.push({ task, depth, hasChildren });
+            if (hasChildren && (ignoreCollapse || !this.isCollapsed(task.id))) {
+              walk(childKey, depth + 1);
+            }
+          });
+        };
+        // Сироты (родитель вне текущего набора) — как корни
+        const ids = new Set(tasks.map(t => t.id));
+        const roots = byParent.root ? byParent.root.slice() : [];
+        tasks.forEach(task => {
+          if (task.parent_id != null && !ids.has(task.parent_id)) {
+            roots.push(task);
+          }
+        });
+        roots.sort((a, b) => this.compareTasks(a, b));
+        const seen = new Set();
+        roots.forEach(task => {
+          if (seen.has(task.id)) return;
+          seen.add(task.id);
+          const childKey = String(task.id);
+          const hasChildren = !!(byParent[childKey] && byParent[childKey].length);
+          rows.push({ task, depth: 0, hasChildren });
+          if (hasChildren && (ignoreCollapse || !this.isCollapsed(task.id))) {
+            walk(childKey, 1);
+          }
+        });
+        return rows;
+      },
+      collectDescendantIds(rootId) {
+        const byParent = this.buildChildrenMap(this.tasks);
+        const result = [];
+        const queue = (byParent[String(rootId)] || []).slice();
+        while (queue.length) {
+          const node = queue.shift();
+          result.push(node.id);
+          const kids = byParent[String(node.id)] || [];
+          kids.forEach(k => queue.push(k));
+        }
+        return result;
+      },
+      isCollapsed(taskId) {
+        return !!this.collapsedTaskIds[String(taskId)];
+      },
+      toggleCollapse(taskId) {
+        const key = String(taskId);
+        const next = { ...this.collapsedTaskIds };
+        if (next[key]) delete next[key];
+        else next[key] = true;
+        this.collapsedTaskIds = next;
+      },
+      selectTask(taskId) {
+        this.selectedTaskId = taskId;
+      },
+      ensureSelectedTaskVisible() {
+        if (this.selectedTaskId == null) return;
+        const currentListId = this.lists[this.currentTab]?.id;
+        const task = this.tasks.find(t => t.id === this.selectedTaskId);
+        if (!task || task.list_id !== currentListId || (this.hideCompleted && task.completed)) {
+          this.selectedTaskId = null;
+        }
+      },
+      onTaskFormListChange() {
+        const parentId = this.taskForm.parent_id;
+        if (parentId === '' || parentId == null) return;
+        const parent = this.tasks.find(t => t.id === Number(parentId));
+        if (!parent || parent.list_id !== this.taskForm.list_id) {
+          this.taskForm.parent_id = '';
+        }
+      },
+      getNotesSelection() {
+        const el = this.$refs.notesTextarea;
+        if (!el || el.disabled) return null;
+        const start = el.selectionStart;
+        const end = el.selectionEnd;
+        const value = this.taskForm.notes || '';
+        return { el, start, end, value, selected: value.slice(start, end) };
+      },
+      applyNotesValue(value, cursorStart, cursorEnd) {
+        this.taskForm.notes = value;
+        this.$nextTick(() => {
+          const el = this.$refs.notesTextarea;
+          if (!el) return;
+          el.focus();
+          el.setSelectionRange(cursorStart, cursorEnd);
+        });
+      },
+      wrapNotesSelection(tag) {
+        const sel = this.getNotesSelection();
+        if (!sel) return;
+        const inner = sel.selected || (tag === 'h3' ? 'Heading' : 'text');
+        const open = `<${tag}>`;
+        const close = `</${tag}>`;
+        const next = sel.value.slice(0, sel.start) + open + inner + close + sel.value.slice(sel.end);
+        const cursorStart = sel.start + open.length;
+        this.applyNotesValue(next, cursorStart, cursorStart + inner.length);
+      },
+      wrapNotesList(listTag) {
+        const sel = this.getNotesSelection();
+        if (!sel) return;
+        const raw = sel.selected || 'item';
+        const lines = raw.split(/\r?\n/).filter(line => line.length > 0);
+        const items = (lines.length ? lines : ['item']).map(line => `  <li>${line.replace(/^([*-]|\d+\.)\s+/, '')}</li>`).join('\n');
+        const block = `<${listTag}>\n${items}\n</${listTag}>`;
+        const next = sel.value.slice(0, sel.start) + block + sel.value.slice(sel.end);
+        this.applyNotesValue(next, sel.start, sel.start + block.length);
+      },
+      wrapNotesChecklist() {
+        const sel = this.getNotesSelection();
+        if (!sel) return;
+        const raw = sel.selected || this.i18n.checklist_item || 'item';
+        const lines = raw.split(/\r?\n/).filter(line => line.length > 0);
+        const items = (lines.length ? lines : [this.i18n.checklist_item || 'item'])
+          .map(line => `  <li><input type="checkbox"> ${line.replace(/^([*-]|\d+\.|\[\s?[xX ]?\])\s+/, '')}</li>`)
+          .join('\n');
+        const block = `<ul>\n${items}\n</ul>`;
+        const next = sel.value.slice(0, sel.start) + block + sel.value.slice(sel.end);
+        this.applyNotesValue(next, sel.start, sel.start + block.length);
+      },
+      escapeNotesAttr(value) {
+        return String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+      },
+      wrapNotesLink() {
+        const sel = this.getNotesSelection();
+        if (!sel) return;
+        const url = window.prompt(this.i18n.link_url_prompt || 'URL', 'https://');
+        if (!url) return;
+        const label = sel.selected || url;
+        const html = `<a href="${this.escapeNotesAttr(url)}" target="_blank" rel="noopener">${label}</a>`;
+        const next = sel.value.slice(0, sel.start) + html + sel.value.slice(sel.end);
+        this.applyNotesValue(next, sel.start, sel.start + html.length);
+      },
+      insertNotesHtml(html) {
+        const sel = this.getNotesSelection();
+        if (!sel) return;
+        const next = sel.value.slice(0, sel.start) + html + sel.value.slice(sel.end);
+        const pos = sel.start + html.length;
+        this.applyNotesValue(next, pos, pos);
+      },
       normalizeTaskSettings(settings) {
         const defaults = {
           reminder_enabled: false,
@@ -859,6 +1291,7 @@
           reminder_code: '',
           start_code: '',
           finish_code: '',
+          completed_code: '',
           auto_complete: false,
           notified: false,
           recurrence_cron: '',
@@ -983,9 +1416,13 @@
         const hasDates = !!started;
         const allDay = isNew ? false : !!task.all_day;
         const settings = this.normalizeTaskSettings(isNew ? null : task.settings);
+        const parentId = (task && task.parent_id != null && task.parent_id !== '')
+          ? Number(task.parent_id)
+          : '';
         return {
           id: isNew ? null : task.id,
-          list_id: isNew ? task.list_id : task.list_id,
+          list_id: task.list_id,
+          parent_id: parentId,
           title: isNew ? '' : (task.title || ''),
           notes: isNew ? '' : (task.notes || ''),
           priority: isNew ? 1 : (task.priority ?? 1),
@@ -1116,8 +1553,18 @@
         this.taskFormError = '';
         this.taskFormIsNew = true;
         this.taskModalTab = 'main';
-        this.notesTab = 'view';
-        this.taskForm = this.buildTaskForm({ list_id: list.id }, true);
+        this.notesTab = 'text';
+        this.taskForm = this.buildTaskForm({ list_id: list.id, parent_id: null }, true);
+        this.showTaskModal();
+      },
+      openTaskModalCreateSubtask(parentId) {
+        const parent = this.tasks.find(t => t.id === parentId);
+        if (!parent || !this.currentListCanCreateTask) return;
+        this.taskFormError = '';
+        this.taskFormIsNew = true;
+        this.taskModalTab = 'main';
+        this.notesTab = 'text';
+        this.taskForm = this.buildTaskForm({ list_id: parent.list_id, parent_id: parent.id }, true);
         this.showTaskModal();
       },
       openTaskModalEdit(taskId) {
@@ -1139,6 +1586,7 @@
         this.$nextTick(() => {
           const input = el.querySelector('input[type="text"]');
           if (input) input.focus();
+          this.initAssigneeSelect();
           this.initViewersSelect();
         });
       },
@@ -1148,9 +1596,21 @@
         window.CronBuilder.openFromButton(btn, { show: true });
       },
       closeTaskModal() {
-        this.destroyViewersSelect();
+        this.destroyUserSelects();
         const modal = bootstrap.Modal.getInstance(document.getElementById('taskModal'));
         if (modal) modal.hide();
+      },
+      userAvatarUrl(username) {
+        if (!username) return '/Users/static/Users.png';
+        const user = this.users.find(item => item.username === username);
+        return (user && user.avatar_url) || '/Users/static/Users.png';
+      },
+      onUserAvatarError(event) {
+        const img = event && event.target;
+        if (!img) return;
+        if (img.src.indexOf('/Users/static/Users.png') === -1) {
+          img.src = '/Users/static/Users.png';
+        }
       },
       initViewersSelect() {
         if (!this.taskFormCanEdit) return;
@@ -1161,11 +1621,27 @@
         });
         window.TodoUsersMultiSelect.init(selectEl);
       },
-      destroyViewersSelect() {
-        const selectEl = this.$refs.taskViewersSelect;
-        if (selectEl && window.TodoUsersMultiSelect) {
-          window.TodoUsersMultiSelect.destroy(selectEl);
+      initAssigneeSelect() {
+        if (!this.taskFormCanEdit) return;
+        const selectEl = this.$refs.taskAssigneeSelect;
+        if (!selectEl || !window.TodoUsersMultiSelect || !window.TodoUsersMultiSelect.initSingle) return;
+        Array.prototype.forEach.call(selectEl.options, (opt) => {
+          opt.selected = String(opt.value) === String(this.taskForm.assignee || '');
+        });
+        window.TodoUsersMultiSelect.initSingle(selectEl);
+      },
+      destroyUserSelects() {
+        const viewersEl = this.$refs.taskViewersSelect;
+        const assigneeEl = this.$refs.taskAssigneeSelect;
+        if (viewersEl && window.TodoUsersMultiSelect) {
+          window.TodoUsersMultiSelect.destroy(viewersEl);
         }
+        if (assigneeEl && window.TodoUsersMultiSelect) {
+          window.TodoUsersMultiSelect.destroy(assigneeEl);
+        }
+      },
+      destroyViewersSelect() {
+        this.destroyUserSelects();
       },
       getViewersFromSelect() {
         const selectEl = this.$refs.taskViewersSelect;
@@ -1174,16 +1650,26 @@
         }
         return window.TodoUsersMultiSelect.getValues(selectEl);
       },
+      getAssigneeFromSelect() {
+        const selectEl = this.$refs.taskAssigneeSelect;
+        if (!selectEl || !window.TodoUsersMultiSelect || !window.TodoUsersMultiSelect.getValue) {
+          return this.taskForm.assignee || '';
+        }
+        return window.TodoUsersMultiSelect.getValue(selectEl) || '';
+      },
       async saveTaskModal() {
         const title = (this.taskForm.title || '').trim();
         if (!title) return;
         this.taskFormError = '';
         const payload = {
           list_id: this.taskForm.list_id,
+          parent_id: this.taskForm.parent_id == null || this.taskForm.parent_id === ''
+            ? null
+            : Number(this.taskForm.parent_id),
           title,
           notes: this.taskForm.notes || '',
           priority: this.taskForm.priority,
-          assignee: this.taskForm.assignee || null,
+          assignee: this.getAssigneeFromSelect() || null,
           viewers: this.getViewersFromSelect(),
           all_day: !!this.taskForm.all_day,
           started: this.taskForm.has_dates
@@ -1211,18 +1697,30 @@
               this.taskFormError = res.data.msg || this.i18n.save_failed;
               return;
             }
-            this.tasks.push(this.normalizeTask(res.data.result));
+            const created = this.normalizeTask(res.data.result);
+            this.tasks.push(created);
+            this.selectedTaskId = created.id;
           } else {
             payload.id = this.taskForm.id;
+            const oldListId = (this.tasks.find(t => t.id === this.taskForm.id) || {}).list_id;
             const res = await axios.post(`/api/Todo/task/${this.taskForm.id}`, payload);
             if (!res.data.success) {
               this.taskFormError = res.data.msg || this.i18n.save_failed;
               return;
             }
+            const updated = this.normalizeTask(res.data.result);
             const taskIndex = this.tasks.findIndex(t => t.id === this.taskForm.id);
             if (taskIndex >= 0) {
-              this.$set(this.tasks, taskIndex, this.normalizeTask(res.data.result));
+              this.$set(this.tasks, taskIndex, updated);
             }
+            // После переноса списка — обновить list_id у потомков локально
+            if (oldListId != null && updated.list_id !== oldListId) {
+              const descendantIds = new Set(this.collectDescendantIds(updated.id));
+              this.tasks = this.tasks.map(t => (
+                descendantIds.has(t.id) ? { ...t, list_id: updated.list_id } : t
+              ));
+            }
+            this.selectedTaskId = updated.id;
           }
           this.closeTaskModal();
         } catch (err) {
@@ -1241,27 +1739,50 @@
       askRemoveTask(taskId) {
         const task = this.tasks.find(t => t.id === taskId);
         const title = task ? task.title : this.i18n.task_fallback;
-        this.showConfirm(this.i18n.delete_task_title, this.i18n.delete_task_confirm.replace('{title}', title), () => {
+        const childCount = this.collectDescendantIds(taskId).length;
+        let message = this.i18n.delete_task_confirm.replace('{title}', title);
+        if (childCount > 0) {
+          message = this.i18n.delete_task_with_children
+            .replace('{title}', title)
+            .replace('{count}', String(childCount));
+        }
+        this.showConfirm(this.i18n.delete_task_title, message, () => {
           this.removeTask(taskId);
         });
       },
       async removeTask(taskId) {
+        const descendantIds = this.collectDescendantIds(taskId);
         const res = await axios.delete(`/api/Todo/task/${taskId}`);
         if (!res.data.success) return;
-        this.tasks = this.tasks.filter(task => task.id !== taskId);
-        if (this.taskForm.id === taskId) {
+        const removeSet = new Set([taskId, ...descendantIds]);
+        this.tasks = this.tasks.filter(task => !removeSet.has(task.id));
+        if (removeSet.has(this.selectedTaskId)) {
+          this.selectedTaskId = null;
+        }
+        if (this.taskForm.id && removeSet.has(this.taskForm.id)) {
           this.closeTaskModal();
         }
+      },
+      mergeTaskUpdates(updates) {
+        if (!updates || !updates.length) return;
+        const map = new Map(updates.map(raw => {
+          const normalized = this.normalizeTask(raw);
+          return [normalized.id, normalized];
+        }));
+        this.tasks = this.tasks.map(task => (map.has(task.id) ? map.get(task.id) : task));
+        map.forEach((task, id) => {
+          if (!this.tasks.some(item => item.id === id)) {
+            this.tasks.push(task);
+          }
+        });
       },
       async complete(taskId) {
         const task = this.tasks.find(item => item.id === taskId);
         if (task && !this.taskCanComplete(task)) return;
         const res = await axios.get(`/api/Todo/task/${taskId}/complete`);
         if (!res.data.success) return;
-        const taskIndex = this.tasks.findIndex(task => task.id === taskId);
-        const updatedTasks = [...this.tasks];
-        updatedTasks[taskIndex] = this.normalizeTask(res.data.result);
-        this.tasks = updatedTasks;
+        const affected = res.data.affected || [res.data.result];
+        this.mergeTaskUpdates(affected);
       },
       openEditModal(index) {
         const list = this.lists[index];
@@ -1352,9 +1873,6 @@
           if (newTab >= 0) this.currentTab = newTab;
         }
       },
-      toggleTask(taskId) {
-        this.expandedTaskId = this.expandedTaskId === taskId ? null : taskId;
-      },
     },
   });
 </script>
@@ -1363,16 +1881,52 @@
     width: auto;
     min-width: 10rem;
   }
-  .notes {
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
   .todo-notes-view {
     min-height: 5rem;
     max-height: 20rem;
     overflow: auto;
     white-space: normal;
     word-break: break-word;
+  }
+  .todo-detail-notes {
+    min-height: 3rem;
+    max-height: none;
+  }
+  .todo-tree-panel {
+    background: var(--bs-body-bg, #fff);
+  }
+  .todo-tree-row {
+    min-height: 2.25rem;
+    padding-top: 0.35rem;
+    padding-bottom: 0.35rem;
+    padding-right: 0.5rem;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    cursor: pointer;
+  }
+  .todo-tree-row:hover {
+    background: rgba(0, 0, 0, 0.04);
+  }
+  .todo-tree-row-selected {
+    background: rgba(25, 135, 84, 0.12);
+  }
+  .todo-tree-row-selected:hover {
+    background: rgba(25, 135, 84, 0.16);
+  }
+  .todo-tree-chevron {
+    width: 1.25rem;
+    line-height: 1;
+    text-decoration: none !important;
+  }
+  .todo-tree-actions {
+    opacity: 0;
+  }
+  .todo-tree-row:hover .todo-tree-actions,
+  .todo-tree-row-selected .todo-tree-actions {
+    opacity: 1;
+  }
+  .todo-detail-panel {
+    min-height: 12rem;
+    background: var(--bs-body-bg, #fff);
   }
   .task-completed {
     text-decoration: line-through;
@@ -1381,9 +1935,6 @@
   }
   .task-item-completed {
     opacity: 0.75;
-  }
-  .accordion-button:not(.collapsed) {
-    box-shadow: none;
   }
   .todo-list-drag-handle {
     cursor: grab;
@@ -1403,5 +1954,44 @@
   .font-monospace {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
     font-size: 0.85rem;
+  }
+  .todo-notes-toolbar .btn {
+    min-width: 2rem;
+  }
+  .todo-notes-view input[type="checkbox"] {
+    margin-right: 0.4rem;
+    vertical-align: middle;
+    cursor: pointer;
+  }
+  .todo-notes-readonly input[type="checkbox"] {
+    pointer-events: none;
+    cursor: default;
+  }
+  .todo-user-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.1rem 0.45rem 0.1rem 0.15rem;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.04);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    font-size: 0.875rem;
+    line-height: 1.2;
+  }
+  .todo-user-avatar {
+    width: 1.25rem;
+    height: 1.25rem;
+    border-radius: 50%;
+    object-fit: cover;
+    flex: 0 0 auto;
+  }
+  .todo-user-avatar-sm {
+    width: 1.1rem;
+    height: 1.1rem;
+  }
+  @media (max-width: 991.98px) {
+    .todo-tree-actions {
+      opacity: 1;
+    }
   }
 </style>

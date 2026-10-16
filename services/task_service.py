@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from zoneinfo import ZoneInfo
 
@@ -53,6 +54,7 @@ def migrate_deadline_to_finished() -> None:
             ('created_by', 'VARCHAR(64)'),
             ('assignee', 'VARCHAR(64)'),
             ('viewers', 'TEXT'),
+            ('extra', 'TEXT'),
         ):
             if column_name in cols:
                 continue
@@ -175,11 +177,76 @@ def _all_day_end_utc_from_utc(dt_utc: datetime) -> datetime:
 
 def task_to_dict(task: TodoTask, username: Optional[str] = None) -> Dict[str, Any]:
     data = notification_service.attach_settings(task)
+    data["parent_id"] = task.parent_id
     data["created_by"] = task.created_by
     data["assignee"] = task.assignee
     data["viewers"] = task_permissions.parse_viewers(task.viewers)
     data["permissions"] = task_permissions.task_permissions(task, username)
     return data
+
+
+def _parse_optional_int(value) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    return int(value)
+
+
+def _children_map(tasks: Optional[List[TodoTask]] = None) -> Dict[Optional[int], List[TodoTask]]:
+    rows = tasks if tasks is not None else TodoTask.query.all()
+    by_parent: Dict[Optional[int], List[TodoTask]] = {}
+    for row in rows:
+        by_parent.setdefault(row.parent_id, []).append(row)
+    return by_parent
+
+
+def collect_descendant_ids(root_id: int, tasks: Optional[List[TodoTask]] = None) -> List[int]:
+    """Все потомки root_id (без самого корня), BFS."""
+    by_parent = _children_map(tasks)
+    result: List[int] = []
+    queue = list(by_parent.get(root_id, []))
+    while queue:
+        node = queue.pop(0)
+        result.append(node.id)
+        queue.extend(by_parent.get(node.id, []))
+    return result
+
+
+def _would_create_cycle(task_id: Optional[int], parent_id: Optional[int]) -> bool:
+    if parent_id is None:
+        return False
+    if task_id is not None and parent_id == task_id:
+        return True
+    seen: Set[int] = set()
+    current: Optional[int] = parent_id
+    while current is not None:
+        if task_id is not None and current == task_id:
+            return True
+        if current in seen:
+            break
+        seen.add(current)
+        row = TodoTask.query.get(current)
+        if row is None:
+            break
+        current = row.parent_id
+    return False
+
+
+def _validate_parent(
+    task: TodoTask,
+    parent_id: Optional[int],
+    list_id: Optional[int],
+    username: Optional[str],
+) -> None:
+    if parent_id is None:
+        return
+    parent = TodoTask.query.get(parent_id)
+    if parent is None:
+        raise ValueError("parent task not found")
+    task_permissions.assert_can_view(parent, username)
+    if list_id is not None and parent.list_id != list_id:
+        raise ValueError("parent task must be in the same list")
+    if _would_create_cycle(task.id, parent_id):
+        raise ValueError("parent_id would create a cycle")
 
 
 def filter_tasks_for_user(query, username: Optional[str] = None):
@@ -235,15 +302,46 @@ def save_task(
         if payload.get("list_id") not in (None, ""):
             task_permissions.assert_can_create_task_in_list(payload.get("list_id"), username)
 
+    old_list_id = task.list_id
+    list_id_changed = False
     if "list_id" in payload:
         list_id = payload.get("list_id")
         new_list_id = int(list_id) if list_id not in (None, "") else None
         if new_list_id != task.list_id and new_list_id is not None:
             task_permissions.assert_can_create_task_in_list(new_list_id, username)
+        list_id_changed = new_list_id != task.list_id
         task.list_id = new_list_id
+
+    if "parent_id" in payload:
+        new_parent_id = _parse_optional_int(payload.get("parent_id"))
+        # При создании без list_id — взять список родителя
+        if new_parent_id is not None and task.list_id is None and entity_id is None:
+            parent_for_list = TodoTask.query.get(new_parent_id)
+            if parent_for_list is not None:
+                task_permissions.assert_can_create_task_in_list(parent_for_list.list_id, username)
+                task.list_id = parent_for_list.list_id
+        _validate_parent(task, new_parent_id, task.list_id, username)
+        task.parent_id = new_parent_id
+
+    # Если list сменился, а parent остался из старого списка — сбросить
+    if task.parent_id is not None:
+        parent = TodoTask.query.get(task.parent_id)
+        if parent is None or parent.list_id != task.list_id:
+            if "parent_id" in payload:
+                raise ValueError("parent task must be in the same list")
+            task.parent_id = None
+
     task.title = payload.get("title", task.title)
     if "notes" in payload:
         task.notes = payload.get("notes")
+    if "extra" in payload:
+        raw_extra = payload.get("extra")
+        if raw_extra is None or raw_extra == "":
+            task.extra = None
+        elif isinstance(raw_extra, (dict, list)):
+            task.extra = json.dumps(raw_extra, ensure_ascii=False)
+        else:
+            task.extra = str(raw_extra)
     if "tags" in payload:
         task.tags = payload.get("tags")
     if "all_day" in payload:
@@ -293,6 +391,15 @@ def save_task(
             "notified": False,
         })
 
+    # Перенос всего поддерева в новый список
+    if list_id_changed and entity_id is not None and task.list_id != old_list_id:
+        descendant_ids = collect_descendant_ids(task.id)
+        if descendant_ids:
+            TodoTask.query.filter(TodoTask.id.in_(descendant_ids)).update(
+                {TodoTask.list_id: task.list_id},
+                synchronize_session=False,
+            )
+
     is_new = entity_id is None
     db.session.commit()
     db.session.refresh(task)
@@ -310,14 +417,27 @@ def delete_task(entity_id: int, username: Optional[str] = None) -> bool:
     if task is None:
         raise task_permissions.NotFoundError("Task not found")
     task_permissions.assert_can_delete(task, username)
-    snapshot = notification_service.attach_settings(task)
     plugin_config = _plugin_config()
-    notification_service.clear_task_schedules(entity_id)
-    if notification_service.has_scheduled_dates(snapshot):
-        notification_service.run_task_event(
-            entity_id, "delete", plugin_config=plugin_config, task_snapshot=snapshot
-        )
-    db.session.delete(task)
+
+    all_tasks = TodoTask.query.all()
+    descendant_ids = collect_descendant_ids(entity_id, all_tasks)
+    # Удаляем снизу вверх: сначала потомки, затем корень
+    delete_ids = list(reversed(descendant_ids)) + [entity_id]
+    id_set = set(delete_ids)
+    by_id = {row.id: row for row in all_tasks if row.id in id_set}
+
+    for tid in delete_ids:
+        row = by_id.get(tid) or TodoTask.query.get(tid)
+        if row is None:
+            continue
+        snapshot = notification_service.attach_settings(row)
+        notification_service.clear_task_schedules(tid)
+        if notification_service.has_scheduled_dates(snapshot):
+            notification_service.run_task_event(
+                tid, "delete", plugin_config=plugin_config, task_snapshot=snapshot
+            )
+        db.session.delete(row)
+
     db.session.commit()
     return True
 
@@ -389,8 +509,10 @@ def _clone_recurring_task(
     now = get_now_to_utc()
     clone = TodoTask()
     clone.list_id = source.list_id
+    clone.parent_id = source.parent_id
     clone.title = source.title
     clone.notes = source.notes
+    clone.extra = source.extra
     clone.tags = source.tags
     clone.priority = source.priority
     clone.all_day = bool(source.all_day)
@@ -413,47 +535,136 @@ def _clone_recurring_task(
     return clone
 
 
-def toggle_task_complete(entity_id: int, username: Optional[str] = None) -> TodoTask:
+def _mark_task_completed(task: TodoTask) -> Tuple[bool, Optional[datetime], Optional[datetime]]:
+    """Пометить задачу выполненной. Возвращает (changed, planned_started, planned_finished)."""
+    if task.completed:
+        return False, None, None
+    planned_started = task.started
+    planned_finished = task.finished
+    now = get_now_to_utc()
+    if task.all_day:
+        end = _all_day_end_utc_from_utc(now)
+        task.completed = end
+        if not task.finished:
+            task.finished = end
+    else:
+        task.completed = now
+        if not task.finished:
+            task.finished = now
+    task.updated = now
+    return True, planned_started, planned_finished
+
+
+def _mark_task_uncompleted(task: TodoTask) -> bool:
+    """Снять отметку выполнения. True если состояние изменилось."""
+    if not task.completed:
+        return False
+    completed_at = task.completed
+    task.completed = None
+    if task.all_day and task.started:
+        if task.finished is None or task.finished == completed_at:
+            task.finished = _all_day_end_utc_from_utc(task.started)
+    elif task.finished == completed_at:
+        task.finished = None
+    task.updated = get_now_to_utc()
+    return True
+
+
+def toggle_task_complete(
+    entity_id: int,
+    username: Optional[str] = None,
+) -> Tuple[TodoTask, List[TodoTask]]:
+    """Переключить выполнение. Каскад: дети при завершении родителя; родитель, если все дети готовы.
+
+    Returns:
+        (корневая переключённая задача, все затронутые задачи включая её)
+    """
     task = get_task(entity_id, username)
     task_permissions.assert_can_complete(task, username)
     becoming_completed = not task.completed
-    # Capture planned window before complete may fill finished=now
-    recurrence_started = task.started
-    recurrence_finished = task.finished
-    if task.completed:
-        completed_at = task.completed
-        task.completed = None
-        # Preserve planned finished; only clear/restore when it was synced to completed
-        if task.all_day and task.started:
-            if task.finished is None or task.finished == completed_at:
-                task.finished = _all_day_end_utc_from_utc(task.started)
-        elif task.finished == completed_at:
-            task.finished = None
-    else:
-        now = get_now_to_utc()
-        if task.all_day:
-            end = _all_day_end_utc_from_utc(now)
-            task.completed = end
-            if not task.finished:
-                task.finished = end
-        else:
-            task.completed = now
-            if not task.finished:
-                task.finished = now
-    task.updated = get_now_to_utc()
-    db.session.commit()
-    db.session.refresh(task)
 
-    plugin_config = _plugin_config()
-    notification_service.sync_task_schedules(task, plugin_config)
+    all_tasks = TodoTask.query.all()
+    by_id = {row.id: row for row in all_tasks}
+    by_parent = _children_map(all_tasks)
+
+    newly_completed: List[Tuple[TodoTask, Optional[datetime], Optional[datetime]]] = []
+    newly_uncompleted: List[TodoTask] = []
+    affected_ids: List[int] = []
+
+    def _track(row: TodoTask) -> None:
+        if row.id not in affected_ids:
+            affected_ids.append(row.id)
 
     if becoming_completed:
-        notification_service.run_immediate_event(task, "completed", plugin_config=plugin_config)
+        # Завершить задачу и всех потомков
+        for tid in [task.id] + collect_descendant_ids(task.id, all_tasks):
+            row = by_id.get(tid)
+            if row is None:
+                continue
+            changed, planned_started, planned_finished = _mark_task_completed(row)
+            if changed:
+                newly_completed.append((row, planned_started, planned_finished))
+                _track(row)
+        # Вверх: если все дети родителя завершены — завершить родителя
+        current = task
+        while current.parent_id:
+            parent = by_id.get(current.parent_id)
+            if parent is None:
+                break
+            children = by_parent.get(parent.id, [])
+            if not children or not all(child.completed for child in children):
+                break
+            changed, planned_started, planned_finished = _mark_task_completed(parent)
+            if changed:
+                newly_completed.append((parent, planned_started, planned_finished))
+                _track(parent)
+            current = parent
+    else:
+        # Снять завершение с задачи и потомков; также с предков
+        for tid in [task.id] + collect_descendant_ids(task.id, all_tasks):
+            row = by_id.get(tid)
+            if row is None:
+                continue
+            if _mark_task_uncompleted(row):
+                newly_uncompleted.append(row)
+                _track(row)
+        current = task
+        while current.parent_id:
+            parent = by_id.get(current.parent_id)
+            if parent is None:
+                break
+            if _mark_task_uncompleted(parent):
+                newly_uncompleted.append(parent)
+                _track(parent)
+            current = parent
+
+    db.session.commit()
+
+    plugin_config = _plugin_config()
+    affected: List[TodoTask] = []
+    for tid in affected_ids:
+        row = TodoTask.query.get(tid)
+        if row is None:
+            continue
+        db.session.refresh(row)
+        notification_service.sync_task_schedules(row, plugin_config)
+        affected.append(row)
+
+    for row, planned_started, planned_finished in newly_completed:
+        # После commit/refresh брать актуальный объект
+        fresh = by_id.get(row.id) or row
+        fresh = next((item for item in affected if item.id == row.id), fresh)
+        notification_service.run_immediate_event(fresh, "completed", plugin_config=plugin_config)
         _clone_recurring_task(
-            task,
+            fresh,
             plugin_config,
-            planned_started=recurrence_started,
-            planned_finished=recurrence_finished,
+            planned_started=planned_started,
+            planned_finished=planned_finished,
         )
 
-    return task
+    # Клоны recurrence могли добавить задачи — корневую вернуть свежей
+    db.session.refresh(task)
+    primary = TodoTask.query.get(entity_id) or task
+    if not any(item.id == primary.id for item in affected):
+        affected.insert(0, primary)
+    return primary, affected

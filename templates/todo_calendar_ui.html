@@ -638,9 +638,13 @@
         if (!this.taskForm || !this.taskFormCanComplete) return;
         const res = await axios.get(`/api/Todo/task/${this.taskForm.id}/complete`);
         if (!res.data.success) return;
+        const affected = res.data.affected || [res.data.result];
+        affected.forEach(raw => {
+          const updated = this.normalizeTask(raw);
+          const idx = this.tasks.findIndex(t => t.id === updated.id);
+          if (idx >= 0) this.$set(this.tasks, idx, updated);
+        });
         const updated = this.normalizeTask(res.data.result);
-        const idx = this.tasks.findIndex(t => t.id === this.taskForm.id);
-        if (idx >= 0) this.$set(this.tasks, idx, updated);
         this.taskForm.completed = !!updated.completed;
         this.taskForm._finishedInput = this.toDatetimeLocal(updated.finished);
         this.taskForm._finishedDateInput = this.toDateInput(updated.finished);
