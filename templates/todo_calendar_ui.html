@@ -27,7 +27,14 @@
   'finish_before_start': _('Finish date cannot be earlier than start date'),
   'save_failed': _('Failed to save task'),
   'close': _('Close'),
-  'save': _('Save')
+  'save': _('Save'),
+  'main': _('Main'),
+  'extra': _('Extra'),
+  'tags': _('Tags'),
+  'tags_placeholder': _('Add tags'),
+  'extra_placeholder': _('Free text or JSON'),
+  'extra_help': _('Free text or JSON (e.g. external import id)'),
+  'all_day': _('All day')
 } %}
 <div id="todo_calendar" v-cloak>
   <div class="d-flex flex-wrap align-items-center gap-2 mb-3 todo-cal-toolbar">
@@ -151,6 +158,13 @@
             <span v-if="taskTimeLabel(task) && listTitle(task.list_id)"> · </span>
             <span v-if="listTitle(task.list_id)">[[ listTitle(task.list_id) ]]</span>
           </div>
+          <div v-if="taskTagsList(task).length" class="todo-cal-task-tags">
+            <span
+              v-for="tag in taskTagsList(task)"
+              :key="task.id + '-tag-' + tag"
+              class="badge bg-secondary"
+            >[[ tag ]]</span>
+          </div>
         </div>
         <p v-if="tasksForDay(day.key).length === 0" class="text-muted small mb-0 todo-cal-empty">{{ _('No tasks') }}</p>
       </div>
@@ -166,88 +180,165 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body" v-if="taskForm">
-          <div class="mb-2">
-            <label class="form-label small mb-0">{{ _('Title') }}</label>
-            <input type="text" class="form-control" v-model="taskForm.title" />
-          </div>
-          <div class="mb-2">
-            <label class="form-label small mb-0">{{ _('Description') }}</label>
-            <ul class="nav nav-tabs nav-tabs-sm" role="tablist">
-              <li class="nav-item" role="presentation">
-                <button class="nav-link" :class="{ active: notesTab === 'view' }" type="button" @click="notesTab = 'view'">{{ _('View') }}</button>
-              </li>
-              <li class="nav-item" role="presentation">
-                <button class="nav-link" :class="{ active: notesTab === 'text' }" type="button" @click="notesTab = 'text'">{{ _('Text') }}</button>
-              </li>
-            </ul>
-            <div class="tab-content border border-top-0 rounded-bottom p-2">
-              <div v-if="notesTab === 'view'" class="todo-cal-notes-view" v-html="notesHtml"></div>
-              <textarea v-else class="form-control" v-model="taskForm.notes" rows="4"></textarea>
-            </div>
-          </div>
-          <div class="row g-2">
-            <div class="col-sm-6">
-              <label class="form-label small mb-0">{{ _('List') }}</label>
-              <select
-                class="form-select"
-                v-model.number="taskForm.list_id"
+          <ul class="nav nav-tabs mb-3">
+            <li class="nav-item">
+              <a class="nav-link" :class="{ active: taskModalTab === 'main' }" href="#" @click.prevent="taskModalTab = 'main'">{{ _('Main') }}</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" :class="{ active: taskModalTab === 'extra' }" href="#" @click.prevent="taskModalTab = 'extra'">{{ _('Extra') }}</a>
+            </li>
+          </ul>
+
+          <div v-show="taskModalTab === 'main'">
+            <div class="mb-2">
+              <label class="form-label small mb-0">{{ _('Title') }}</label>
+              <input
+                type="text"
+                class="form-control"
+                v-model="taskForm.title"
                 :disabled="!taskFormCanEdit"
-              >
-                <option v-for="list in moveTargetLists" :key="list.id" :value="list.id">[[ list.title ]]</option>
-              </select>
-            </div>
-            <div class="col-sm-6">
-              <label class="form-label small mb-0">{{ _('Priority') }}</label>
-              <select class="form-select" v-model.number="taskForm.priority">
-                <option :value="0">{{ _('Low') }}</option>
-                <option :value="1">{{ _('Normal') }}</option>
-                <option :value="2">{{ _('High') }}</option>
-                <option :value="3">{{ _('Urgent') }}</option>
-              </select>
-            </div>
-            <div class="col-sm-6">
-              <label class="form-label small mb-0">{{ _('Start') }}</label>
-              <input
-                v-if="taskForm.all_day"
-                type="date"
-                class="form-control"
-                v-model="taskForm._startedDateInput"
-              />
-              <input
-                v-else
-                type="datetime-local"
-                class="form-control"
-                v-model="taskForm._startedInput"
               />
             </div>
-            <div class="col-sm-6">
-              <label class="form-label small mb-0">{{ _('Finish') }}</label>
+            <div class="mb-2">
+              <label class="form-label small mb-0">{{ _('Description') }}</label>
+              <ul class="nav nav-tabs nav-tabs-sm" role="tablist">
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link" :class="{ active: notesTab === 'view' }" type="button" @click="notesTab = 'view'">{{ _('View') }}</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link" :class="{ active: notesTab === 'text' }" type="button" @click="notesTab = 'text'">{{ _('Text') }}</button>
+                </li>
+              </ul>
+              <div class="tab-content border border-top-0 rounded-bottom p-2">
+                <div
+                  v-if="notesTab === 'view'"
+                  class="todo-cal-notes-view"
+                  :class="{ 'todo-cal-notes-readonly': !taskFormCanEdit }"
+                  v-html="notesHtml"
+                ></div>
+                <textarea
+                  v-else
+                  class="form-control"
+                  v-model="taskForm.notes"
+                  rows="4"
+                  :disabled="!taskFormCanEdit"
+                ></textarea>
+              </div>
+            </div>
+            <div class="row g-2">
+              <div class="col-sm-6">
+                <label class="form-label small mb-0">{{ _('List') }}</label>
+                <select
+                  class="form-select"
+                  v-model.number="taskForm.list_id"
+                  :disabled="!taskFormCanEdit"
+                >
+                  <option v-for="list in moveTargetLists" :key="list.id" :value="list.id">[[ list.title ]]</option>
+                </select>
+              </div>
+              <div class="col-sm-6">
+                <label class="form-label small mb-0">{{ _('Priority') }}</label>
+                <select class="form-select" v-model.number="taskForm.priority" :disabled="!taskFormCanEdit">
+                  <option :value="0">{{ _('Low') }}</option>
+                  <option :value="1">{{ _('Normal') }}</option>
+                  <option :value="2">{{ _('High') }}</option>
+                  <option :value="3">{{ _('Urgent') }}</option>
+                </select>
+              </div>
+              <div class="col-12">
+                <div class="form-check mb-1">
+                  <input
+                    class="form-check-input"
+                    type="checkbox"
+                    id="calTaskAllDay"
+                    v-model="taskForm.all_day"
+                    :disabled="!taskFormCanEdit"
+                    @change="onCalAllDayToggle"
+                  />
+                  <label class="form-check-label" for="calTaskAllDay">{{ _('All day') }}</label>
+                </div>
+              </div>
+              <div class="col-sm-6">
+                <label class="form-label small mb-0">{{ _('Start') }}</label>
+                <input
+                  v-if="taskForm.all_day"
+                  type="date"
+                  class="form-control"
+                  v-model="taskForm._startedDateInput"
+                  :disabled="!taskFormCanEdit"
+                />
+                <input
+                  v-else
+                  type="datetime-local"
+                  class="form-control"
+                  v-model="taskForm._startedInput"
+                  :disabled="!taskFormCanEdit"
+                />
+              </div>
+              <div class="col-sm-6">
+                <label class="form-label small mb-0">{{ _('Finish') }}</label>
+                <input
+                  v-if="taskForm.all_day"
+                  type="date"
+                  class="form-control"
+                  v-model="taskForm._finishedDateInput"
+                  :disabled="!taskFormCanEdit"
+                />
+                <input
+                  v-else
+                  type="datetime-local"
+                  class="form-control"
+                  v-model="taskForm._finishedInput"
+                  :disabled="!taskFormCanEdit"
+                />
+              </div>
+              <div class="col-12">
+                <label class="form-label small mb-0">{{ _('Tags') }}</label>
+                <input
+                  v-if="taskFormCanEdit"
+                  type="text"
+                  class="form-control"
+                  v-model="taskForm.tagsText"
+                  :placeholder="i18n.tags_placeholder"
+                />
+                <div v-else class="d-flex flex-wrap gap-1">
+                  <span
+                    v-for="tag in parseTags(taskForm.tagsText)"
+                    :key="'cal-tag-' + tag"
+                    class="badge bg-secondary"
+                  >[[ tag ]]</span>
+                  <span v-if="!parseTags(taskForm.tagsText).length" class="text-muted small">—</span>
+                </div>
+              </div>
+            </div>
+            <div class="form-check mt-2">
               <input
-                v-if="taskForm.all_day"
-                type="date"
-                class="form-control"
-                v-model="taskForm._finishedDateInput"
+                class="form-check-input"
+                type="checkbox"
+                id="calTaskCompleted"
+                :checked="!!taskForm.completed"
+                :disabled="!taskFormCanComplete"
+                @change="toggleCompleteFromModal"
               />
-              <input
-                v-else
-                type="datetime-local"
-                class="form-control"
-                v-model="taskForm._finishedInput"
-              />
+              <label class="form-check-label" for="calTaskCompleted">{{ _('Completed') }}</label>
             </div>
           </div>
-          <div class="form-check mt-2">
-            <input
-              class="form-check-input"
-              type="checkbox"
-              id="calTaskCompleted"
-              :checked="!!taskForm.completed"
-              :disabled="!taskFormCanComplete"
-              @change="toggleCompleteFromModal"
-            />
-            <label class="form-check-label" for="calTaskCompleted">{{ _('Completed') }}</label>
+
+          <div v-show="taskModalTab === 'extra'">
+            <div class="mb-2">
+              <label class="form-label small mb-0">{{ _('Extra') }}</label>
+              <textarea
+                class="form-control font-monospace"
+                rows="10"
+                v-model="taskForm.extra"
+                :disabled="!taskFormCanEdit"
+                :placeholder="i18n.extra_placeholder"
+              ></textarea>
+              <div class="form-text">[[ i18n.extra_help ]]</div>
+            </div>
           </div>
-          <div v-if="taskFormError" class="alert alert-danger py-2 small mb-0 mt-2">[[ taskFormError ]]</div>
+
+          <div v-if="taskFormError" class="alert alert-danger py-2 small mb-0 mt-3">[[ taskFormError ]]</div>
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ _('Close') }}</button>
@@ -280,6 +371,7 @@
       maxMonthTasks: 4,
       taskForm: null,
       taskFormError: '',
+      taskModalTab: 'main',
       notesTab: 'view',
       weekDayNames: ['{{ _('Mon') }}', '{{ _('Tue') }}', '{{ _('Wed') }}', '{{ _('Thu') }}', '{{ _('Fri') }}', '{{ _('Sat') }}', '{{ _('Sun') }}'],
       monthNames: [
@@ -517,7 +609,23 @@
         if (time) parts.push(time);
         const list = this.listTitle(task.list_id);
         if (list) parts.push(list);
+        const tags = this.taskTagsList(task);
+        if (tags.length) parts.push(tags.join(', '));
         return parts.join(' · ');
+      },
+      parseTags(value) {
+        if (Array.isArray(value)) {
+          return value.map((t) => String(t).trim()).filter(Boolean);
+        }
+        if (value == null || value === '') return [];
+        return String(value).split(',').map((t) => t.trim()).filter(Boolean);
+      },
+      serializeTags(tags) {
+        return this.parseTags(tags).join(', ');
+      },
+      taskTagsList(task) {
+        if (!task) return [];
+        return Array.isArray(task.tags) ? task.tags : this.parseTags(task.tags);
       },
       priorityClass(priority) {
         if (priority >= 3) return 'todo-cal-priority-urgent';
@@ -542,6 +650,8 @@
         if (item.priority === null || item.priority === undefined) item.priority = 1;
         item.all_day = !!item.all_day;
         item.permissions = item.permissions || {};
+        item.tags = this.parseTags(item.tags);
+        item.extra = item.extra == null ? '' : String(item.extra);
         return item;
       },
       toDatetimeLocal(value) {
@@ -571,6 +681,8 @@
           list_id: task.list_id,
           title: task.title || '',
           notes: task.notes || '',
+          extra: task.extra || '',
+          tagsText: this.serializeTags(task.tags),
           priority: task.priority ?? 1,
           all_day: !!task.all_day,
           completed: !!task.completed,
@@ -581,11 +693,30 @@
           _finishedDateInput: this.toDateInput(task.finished),
         };
       },
+      onCalAllDayToggle() {
+        if (!this.taskForm) return;
+        if (this.taskForm.all_day) {
+          if (this.taskForm._startedInput) {
+            this.taskForm._startedDateInput = this.taskForm._startedInput.slice(0, 10);
+          }
+          if (this.taskForm._finishedInput) {
+            this.taskForm._finishedDateInput = this.taskForm._finishedInput.slice(0, 10);
+          }
+        } else {
+          if (this.taskForm._startedDateInput) {
+            this.taskForm._startedInput = `${this.taskForm._startedDateInput}T00:00`;
+          }
+          if (this.taskForm._finishedDateInput) {
+            this.taskForm._finishedInput = `${this.taskForm._finishedDateInput}T23:59`;
+          }
+        }
+      },
       openTaskModalEdit(taskId) {
         const task = this.tasks.find(t => t.id === taskId);
         if (!task) return;
         this.taskFormError = '';
         this.taskForm = this.buildTaskForm(task);
+        this.taskModalTab = 'main';
         this.notesTab = 'view';
         const el = document.getElementById('calTaskModal');
         if (!this._taskModal) this._taskModal = new bootstrap.Modal(el);
@@ -605,6 +736,8 @@
           list_id: this.taskForm.list_id,
           title,
           notes: this.taskForm.notes || '',
+          extra: this.taskForm.extra || '',
+          tags: this.serializeTags(this.taskForm.tagsText),
           priority: this.taskForm.priority,
           all_day: !!this.taskForm.all_day,
           started: this.taskForm.all_day
@@ -712,7 +845,7 @@
     border-left: 3px solid transparent;
   }
   .todo-cal-task-chip:hover {
-    filter: brightness(0.95);
+    outline: 1px solid rgba(var(--bs-primary-rgb), 0.35);
   }
   .todo-cal-task-time {
     font-weight: 600;
@@ -772,7 +905,7 @@
     background: var(--bs-tertiary-bg, rgba(0, 0, 0, 0.04));
   }
   .todo-cal-task-card:hover {
-    filter: brightness(0.97);
+    outline: 1px solid rgba(var(--bs-primary-rgb), 0.35);
   }
   .todo-cal-task-card-title {
     font-size: 0.875rem;
@@ -804,11 +937,31 @@
   }
   .task-completed {
     text-decoration: line-through;
-    color: #888;
+    color: var(--bs-secondary-color, var(--bs-secondary));
   }
   .todo-cal-empty {
     text-align: center;
     padding: 1rem 0;
+  }
+  .todo-cal-notes-view {
+    min-height: 5rem;
+    max-height: 20rem;
+    overflow: auto;
+    white-space: normal;
+    word-break: break-word;
+    color: var(--bs-body-color);
+  }
+  .todo-cal-notes-readonly {
+    opacity: 0.9;
+  }
+  .todo-cal-task-card .todo-cal-task-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.2rem;
+    margin-top: 0.25rem;
+  }
+  .todo-cal-task-card .todo-cal-task-tags .badge {
+    font-weight: 500;
   }
   @media (max-width: 768px) {
     .todo-cal-columns {
@@ -817,10 +970,5 @@
     .todo-cal-month-cell {
       min-height: 5rem;
     }
-.todo-cal-notes-view {
-    min-height: 5rem;
-    max-height: 20rem;
-    overflow: auto;
-    white-space: normal;
   }
 </style>

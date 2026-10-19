@@ -293,7 +293,7 @@ def mcp_capabilities() -> dict:
             "parent_id nests tasks (unlimited depth, same list); delete cascades to all descendants.",
             "complete_task: completing parent completes descendants; all children done auto-completes parent; uncomplete cascades to descendants and ancestors.",
             "Hook code runtime vars: task (dict with title, notes, extra, ...), task_id, event, params, logger.",
-            "Task.extra: opaque text/JSON for import ids etc.; writable via MCP/API, not shown in UI.",
+            "Task.extra: opaque text/JSON for import ids etc.; writable via MCP/API and Extra tab in UI.",
             "Use collection hooks + validate_entity_code / run_entity_dry to test hook Python (context: task_id, event).",
             "MCP has full access to all lists and tasks (no per-user ACL).",
         ],
@@ -401,7 +401,7 @@ def mcp_entity_schema(collection: str) -> dict:
                     "type": ["string", "object", "array", "null"],
                     "description": (
                         "Opaque extra data (e.g. external calendar import id). "
-                        "Not shown in UI; free text or JSON object/array"
+                        "Editable on Extra tab in UI; free text or JSON object/array"
                     ),
                 },
                 "tags": {

@@ -95,7 +95,15 @@
   'select_task': _('Select a task'),
   'edit': _('Edit'),
   'link_url_prompt': _('Enter link URL'),
-  'checklist_item': _('Checklist item')
+  'checklist_item': _('Checklist item'),
+  'tags': _('Tags'),
+  'tags_placeholder': _('Add tags'),
+  'extra': _('Extra'),
+  'extra_placeholder': _('Free text or JSON'),
+  'filter_placeholder': _('Search tasks'),
+  'all_tags': _('All tags'),
+  'clear_filters': _('Clear filters'),
+  'no_matching_tasks': _('No matching tasks')
 } %}
 <div id="list_tasks" v-cloak>
     <!-- Навигация по вкладкам -->
@@ -185,6 +193,33 @@
         <input class="form-check-input" type="checkbox" id="hideCompleted" v-model="hideCompleted">
         <label class="form-check-label small" for="hideCompleted">{{ _('Hide completed') }}</label>
       </div>
+      <div class="input-group input-group-sm todo-filter-search ms-auto">
+        <span class="input-group-text"><i class="fas fa-search"></i></span>
+        <input
+          type="search"
+          class="form-control"
+          v-model.trim="filterQuery"
+          :placeholder="i18n.filter_placeholder"
+          autocomplete="off"
+        />
+      </div>
+      <select
+        class="form-select form-select-sm todo-filter-tag"
+        v-model="filterTag"
+        :title="i18n.tags"
+      >
+        <option value="">[[ i18n.all_tags ]]</option>
+        <option v-for="tag in availableTags" :key="'filter-tag-' + tag" :value="tag">[[ tag ]]</option>
+      </select>
+      <button
+        v-if="hasActiveFilter"
+        type="button"
+        class="btn btn-sm btn-outline-secondary"
+        :title="i18n.clear_filters"
+        @click="clearFilters"
+      >
+        <i class="fas fa-times"></i>
+      </button>
     </div>
 
     <!-- Master-detail: дерево + панель деталей -->
@@ -265,7 +300,9 @@
               ><i class="fas fa-trash"></i></button>
             </div>
           </div>
-          <p v-if="taskRows.length === 0" class="text-muted mb-0 p-3">{{ _('No tasks') }}</p>
+          <p v-if="taskRows.length === 0" class="text-muted mb-0 p-3">
+            [[ hasActiveFilter ? i18n.no_matching_tasks : i18n.no_tasks ]]
+          </p>
         </div>
       </div>
 
@@ -358,6 +395,18 @@
                 <span>[[ name ]]</span>
               </span>
             </div>
+            <div v-if="taskTagsList(selectedTask).length" class="mt-1 d-flex align-items-center flex-wrap gap-1">
+              <span class="text-nowrap"><i class="fas fa-tags me-1"></i>{{ _('Tags') }}:</span>
+              <span
+                v-for="tag in taskTagsList(selectedTask)"
+                :key="'detail-tag-' + tag"
+                class="badge bg-secondary"
+              >[[ tag ]]</span>
+            </div>
+            <div v-if="selectedTask.extra" class="mt-2">
+              <div class="text-nowrap mb-1"><i class="fas fa-code me-1"></i>{{ _('Extra') }}:</div>
+              <pre class="todo-extra-view small mb-0 text-break border rounded p-2">[[ selectedTask.extra ]]</pre>
+            </div>
           </div>
         </div>
         <div class="todo-detail-panel border rounded p-4 text-muted h-100 d-flex align-items-center justify-content-center" v-else>
@@ -379,6 +428,9 @@
           <ul class="nav nav-tabs mb-3">
             <li class="nav-item">
               <a class="nav-link" :class="{ active: taskModalTab === 'main' }" href="#" @click.prevent="taskModalTab = 'main'">{{ _('Main') }}</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" :class="{ active: taskModalTab === 'extra' }" href="#" @click.prevent="taskModalTab = 'extra'">{{ _('Extra') }}</a>
             </li>
             <li class="nav-item" v-if="taskForm.has_dates">
               <a class="nav-link" :class="{ active: taskModalTab === 'settings' }" href="#" @click.prevent="taskModalTab = 'settings'">{{ _('Settings') }}</a>
@@ -616,7 +668,42 @@
                 >[[ user.username ]]</option>
               </select>
             </div>
+            <div class="col-12">
+              <label class="form-label small mb-0">{{ _('Tags') }}</label>
+              <div v-if="taskFormCanEdit">
+                <input
+                  type="text"
+                  id="taskTagsInput"
+                  ref="taskTagsInput"
+                  class="form-control"
+                  :placeholder="i18n.tags_placeholder"
+                />
+              </div>
+              <div v-else class="d-flex flex-wrap gap-1">
+                <span
+                  v-for="tag in (taskForm.tags || [])"
+                  :key="'form-tag-' + tag"
+                  class="badge bg-secondary"
+                >[[ tag ]]</span>
+                <span v-if="!(taskForm.tags || []).length" class="text-muted small">—</span>
+              </div>
+              <div class="form-text">{{ _('Type a tag and press Enter') }}</div>
+            </div>
           </div>
+          </div>
+
+          <div v-show="taskModalTab === 'extra'">
+            <div class="mb-2">
+              <label class="form-label small mb-0">{{ _('Extra') }}</label>
+              <textarea
+                class="form-control font-monospace"
+                rows="10"
+                v-model="taskForm.extra"
+                :disabled="!taskFormCanEdit"
+                :placeholder="i18n.extra_placeholder"
+              ></textarea>
+              <div class="form-text">{{ _('Free text or JSON (e.g. external import id)') }}</div>
+            </div>
           </div>
 
           <div v-show="taskModalTab === 'settings' && taskForm.has_dates">
@@ -739,6 +826,8 @@
         parent_id: '',
         title: '',
         notes: '',
+        extra: '',
+        tags: [],
         priority: 1,
         all_day: false,
         has_dates: false,
@@ -763,6 +852,8 @@
       sortAsc: true,
       completedBottom: true,
       hideCompleted: false,
+      filterQuery: '',
+      filterTag: '',
       confirmTitle: '',
       confirmMessage: '',
       confirmCallback: null,
@@ -803,6 +894,7 @@
       if (taskModalEl) {
         taskModalEl.addEventListener('hidden.bs.modal', () => {
           this.destroyViewersSelect();
+          this.destroyTagsSelect();
         });
       }
     },
@@ -813,6 +905,17 @@
       hideCompleted(value) {
         localStorage.todo_hideCompleted = value;
         this.ensureSelectedTaskVisible();
+      },
+      filterQuery() {
+        this.ensureSelectedTaskVisible();
+      },
+      filterTag() {
+        this.ensureSelectedTaskVisible();
+      },
+      availableTags(tags) {
+        if (this.filterTag && !tags.includes(this.filterTag)) {
+          this.filterTag = '';
+        }
       },
       collapsedTaskIds: {
         deep: true,
@@ -841,10 +944,28 @@
         if (this.hideCompleted) {
           data = data.filter(task => !task.completed);
         }
+        if (this.hasActiveFilter) {
+          data = this.applyTaskFilters(data);
+        }
         return data;
       },
       taskRows() {
-        return this.buildVisibleRows(this.listTasks);
+        return this.buildVisibleRows(this.listTasks, {
+          ignoreCollapse: this.hasActiveFilter,
+        });
+      },
+      hasActiveFilter() {
+        return !!(this.filterQuery || this.filterTag);
+      },
+      availableTags() {
+        const currentListId = this.lists[this.currentTab]?.id;
+        if (!currentListId) return [];
+        const set = new Set();
+        this.tasks.forEach((task) => {
+          if (task.list_id !== currentListId) return;
+          this.taskTagsList(task).forEach((tag) => set.add(tag));
+        });
+        return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
       },
       selectedTask() {
         if (this.selectedTaskId == null) return null;
@@ -1014,12 +1135,72 @@
         item.viewers = Array.isArray(item.viewers) ? item.viewers : [];
         item.assignee = item.assignee || '';
         item.created_by = item.created_by || '';
+        item.tags = this.parseTags(item.tags);
+        item.extra = item.extra == null ? '' : String(item.extra);
         item._startedInput = this.toDatetimeLocal(item.started);
         item._startedDateInput = this.toDateInput(item.started);
         item._finishedInput = this.toDatetimeLocal(item.finished);
         item._finishedDateInput = this.toDateInput(item.finished);
         item.all_day = !!item.all_day;
         return item;
+      },
+      parseTags(value) {
+        if (Array.isArray(value)) {
+          return value.map((t) => String(t).trim()).filter(Boolean);
+        }
+        if (value == null || value === '') return [];
+        return String(value).split(',').map((t) => t.trim()).filter(Boolean);
+      },
+      serializeTags(tags) {
+        return this.parseTags(tags).join(', ');
+      },
+      taskTagsList(task) {
+        if (!task) return [];
+        return Array.isArray(task.tags) ? task.tags : this.parseTags(task.tags);
+      },
+      taskMatchesFilter(task) {
+        const tag = (this.filterTag || '').trim();
+        if (tag) {
+          const tags = this.taskTagsList(task);
+          const tagLower = tag.toLowerCase();
+          if (!tags.some((item) => String(item).toLowerCase() === tagLower)) {
+            return false;
+          }
+        }
+        const query = (this.filterQuery || '').trim().toLowerCase();
+        if (!query) return true;
+        const haystack = [
+          task.title || '',
+          task.notes || '',
+          this.serializeTags(task.tags),
+          task.extra || '',
+          task.assignee || '',
+          task.created_by || '',
+        ].join('\n').toLowerCase();
+        return haystack.includes(query);
+      },
+      applyTaskFilters(tasks) {
+        const byId = new Map(tasks.map((task) => [task.id, task]));
+        const matched = new Set();
+        tasks.forEach((task) => {
+          if (this.taskMatchesFilter(task)) matched.add(task.id);
+        });
+        const keep = new Set(matched);
+        matched.forEach((id) => {
+          let current = byId.get(id);
+          while (current && current.parent_id != null) {
+            const parentId = current.parent_id;
+            if (keep.has(parentId)) break;
+            if (!byId.has(parentId)) break;
+            keep.add(parentId);
+            current = byId.get(parentId);
+          }
+        });
+        return tasks.filter((task) => keep.has(task.id));
+      },
+      clearFilters() {
+        this.filterQuery = '';
+        this.filterTag = '';
       },
       formatNotesHtml(notes) {
         if (!notes) return '';
@@ -1204,6 +1385,10 @@
         const currentListId = this.lists[this.currentTab]?.id;
         const task = this.tasks.find(t => t.id === this.selectedTaskId);
         if (!task || task.list_id !== currentListId || (this.hideCompleted && task.completed)) {
+          this.selectedTaskId = null;
+          return;
+        }
+        if (this.hasActiveFilter && !this.listTasks.some(t => t.id === this.selectedTaskId)) {
           this.selectedTaskId = null;
         }
       },
@@ -1425,6 +1610,8 @@
           parent_id: parentId,
           title: isNew ? '' : (task.title || ''),
           notes: isNew ? '' : (task.notes || ''),
+          extra: isNew ? '' : (task.extra || ''),
+          tags: isNew ? [] : this.parseTags(task.tags),
           priority: isNew ? 1 : (task.priority ?? 1),
           assignee: isNew ? '' : (task.assignee || ''),
           viewers: isNew ? [] : (Array.isArray(task.viewers) ? [...task.viewers] : []),
@@ -1588,6 +1775,7 @@
           if (input) input.focus();
           this.initAssigneeSelect();
           this.initViewersSelect();
+          this.initTagsSelect();
         });
       },
       openCronBuilder(event) {
@@ -1597,6 +1785,7 @@
       },
       closeTaskModal() {
         this.destroyUserSelects();
+        this.destroyTagsSelect();
         const modal = bootstrap.Modal.getInstance(document.getElementById('taskModal'));
         if (modal) modal.hide();
       },
@@ -1643,6 +1832,42 @@
       destroyViewersSelect() {
         this.destroyUserSelects();
       },
+      destroyTagsSelect() {
+        const el = this.$refs.taskTagsInput;
+        if (!el) return;
+        if (el._todoTagsChoices) {
+          el._todoTagsChoices.destroy();
+          el._todoTagsChoices = null;
+        }
+      },
+      initTagsSelect() {
+        if (!this.taskFormCanEdit) return;
+        const el = this.$refs.taskTagsInput;
+        if (!el || !window.Choices) return;
+        this.destroyTagsSelect();
+        el.value = this.serializeTags(this.taskForm.tags);
+        const instance = new window.Choices(el, {
+          delimiter: ',',
+          editItems: true,
+          removeItemButton: true,
+          duplicateItemsAllowed: false,
+          addItems: true,
+          paste: true,
+          placeholder: true,
+          placeholderValue: this.i18n.tags_placeholder || '',
+          itemSelectText: '',
+        });
+        el._todoTagsChoices = instance;
+      },
+      getTagsFromSelect() {
+        const el = this.$refs.taskTagsInput;
+        if (!el || !el._todoTagsChoices) {
+          return this.parseTags(this.taskForm.tags);
+        }
+        const value = el._todoTagsChoices.getValue(true);
+        if (Array.isArray(value)) return this.parseTags(value);
+        return this.parseTags(value);
+      },
       getViewersFromSelect() {
         const selectEl = this.$refs.taskViewersSelect;
         if (!selectEl || !window.TodoUsersMultiSelect) {
@@ -1661,6 +1886,7 @@
         const title = (this.taskForm.title || '').trim();
         if (!title) return;
         this.taskFormError = '';
+        const tagsList = this.getTagsFromSelect();
         const payload = {
           list_id: this.taskForm.list_id,
           parent_id: this.taskForm.parent_id == null || this.taskForm.parent_id === ''
@@ -1668,6 +1894,8 @@
             : Number(this.taskForm.parent_id),
           title,
           notes: this.taskForm.notes || '',
+          extra: this.taskForm.extra || '',
+          tags: this.serializeTags(tagsList),
           priority: this.taskForm.priority,
           assignee: this.getAssigneeFromSelect() || null,
           viewers: this.getViewersFromSelect(),
@@ -1881,12 +2109,31 @@
     width: auto;
     min-width: 10rem;
   }
+  .todo-toolbar .todo-filter-search {
+    width: auto;
+    min-width: 10rem;
+    max-width: 16rem;
+  }
+  .todo-toolbar .todo-filter-tag {
+    width: auto;
+    min-width: 8rem;
+    max-width: 12rem;
+  }
   .todo-notes-view {
     min-height: 5rem;
     max-height: 20rem;
     overflow: auto;
     white-space: normal;
     word-break: break-word;
+  }
+  .todo-extra-view {
+    max-height: 12rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--bs-body-color);
+    background-color: var(--bs-secondary-bg, var(--bs-tertiary-bg, rgba(var(--bs-secondary-rgb), 0.12)));
+    border-color: var(--bs-border-color) !important;
   }
   .todo-detail-notes {
     min-height: 3rem;
