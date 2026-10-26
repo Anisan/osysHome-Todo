@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from flask import g
+from flask import g, has_app_context, has_request_context
 from flask_login import current_user
 
 from plugins.Todo.models.Task import TodoTask
@@ -19,21 +19,41 @@ class NotFoundError(ValueError):
     """Raised when entity is missing or not visible to the current user."""
 
 
+def _g_get(name: str, default=None):
+    """Чтение flask.g. Вне app context (и без HTTP) атрибута нет."""
+    if not has_app_context():
+        return default
+    return getattr(g, name, default)
+
+
+def _http_user():
+    """Пользователь flask-login. Вне запроса прокси равен None."""
+    if not has_request_context():
+        return None
+    try:
+        if not current_user.is_authenticated:
+            return None
+        return current_user
+    except (AttributeError, RuntimeError):
+        return None
+
+
 def mcp_unrestricted() -> bool:
-    return bool(getattr(g, "_todo_mcp_unrestricted", False))
+    return bool(_g_get("_todo_mcp_unrestricted", False))
 
 
 def system_unrestricted() -> bool:
     """Scheduler / internal automation (e.g. auto-complete at finish)."""
-    return bool(getattr(g, "_todo_system_unrestricted", False))
+    return bool(_g_get("_todo_system_unrestricted", False))
 
 
 def current_username() -> Optional[str]:
-    user = getattr(g, "current_user", None)
+    user = _g_get("current_user")
     if user and getattr(user, "username", None):
         return str(user.username)
-    if current_user.is_authenticated:
-        return str(current_user.username)
+    user = _http_user()
+    if user is not None and getattr(user, "username", None):
+        return str(user.username)
     return None
 
 
@@ -52,10 +72,11 @@ def _role_for_username(username: Optional[str]) -> Optional[str]:
 def is_admin() -> bool:
     if mcp_unrestricted() or system_unrestricted():
         return True
-    user = getattr(g, "current_user", None)
+    user = _g_get("current_user")
     if user and getattr(user, "role", None) == "admin":
         return True
-    if current_user.is_authenticated and getattr(current_user, "role", None) == "admin":
+    user = _http_user()
+    if user is not None and getattr(user, "role", None) == "admin":
         return True
     return _role_for_username(current_username()) == "admin"
 

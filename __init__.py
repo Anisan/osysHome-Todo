@@ -24,7 +24,7 @@ class Todo(BasePlugin):
         self.system = True
         self.actions = ['search','widget','page']
         self.category = "App"
-        self.version = "0.12"
+        self.version = "0.13"
         
         from plugins.Todo.api import create_api_ns
         api_ns = create_api_ns()
